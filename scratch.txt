@@ -1,0 +1,3 @@
+
+docker run --rm -v $PWD:/local openapitools/openapi-generator-cli generate -i /local/ynab_spec.yaml -g rust  -o /local/out/
+                
