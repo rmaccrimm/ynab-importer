@@ -1,4 +1,6 @@
 /target
 
+ynab_spec.yaml
+db.sqlite3
 # Personal access token
 .pat
