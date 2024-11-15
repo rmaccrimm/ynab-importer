@@ -1,14 +1,19 @@
 use clap::Parser;
 use refinery::embed_migrations;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::Connection;
 use std::fs;
-use std::io;
 use std::io::Read;
-use std::io::Write;
 use std::path::PathBuf;
 use tokio;
 use ynab_api::apis::configuration::Configuration;
 use ynab_api::apis::{accounts_api::get_accounts, budgets_api::get_budgets};
+use ynab_importer::db::{account, budget, config};
+
+use rusqlite;
+
+use std::io;
+use std::io::Write;
+
 use ynab_api::models::Account;
 use ynab_api::models::BudgetSummary;
 
@@ -29,62 +34,7 @@ struct Args {
     transaction_dir: PathBuf,
 }
 
-pub mod config {
-    use rusqlite;
-    use rusqlite::{params, Connection};
-
-    pub const USER_ID: &str = "user_id";
-    pub const ACCESS_TOKEN: &str = "access_token";
-    pub const TRANSACTION_DIR: &str = "transaction_dir";
-
-    pub fn set(conn: &Connection, key: &str, value: &str) -> Result<usize, rusqlite::Error> {
-        conn.execute(
-            "INSERT INTO configuration(key, value) VALUES (?1, ?2) \
-            ON CONFLICT(key) DO UPDATE SET value=?2;",
-            params![key, value],
-        )
-    }
-}
-// Gets the row id for the budget, creating a new row if one does not already exist.
-pub fn insert_budget(
-    conn: &Connection,
-    budget_summary: &BudgetSummary,
-) -> Result<i64, rusqlite::Error> {
-    let uuid = budget_summary.id.hyphenated().to_string();
-    let mut stmt = conn.prepare("SELECT id FROM budget WHERE uuid = ?")?;
-    match stmt
-        .query_row([&uuid], |row| row.get(0))
-        .optional()
-        .unwrap()
-    {
-        Some(id) => Ok(id),
-        None => {
-            conn.execute(
-                "INSERT INTO budget(uuid, name) VALUES (?1, ?2);",
-                params![uuid, budget_summary.name],
-            )?;
-            Ok(conn.last_insert_rowid())
-        }
-    }
-}
-
-fn insert_accounts(
-    conn: &Connection,
-    budget_id: i64,
-    accounts: &Vec<Account>,
-) -> Result<(), rusqlite::Error> {
-    for acc in accounts.iter() {
-        let uuid = acc.id.hyphenated().to_string();
-        conn.execute(
-            "INSERT INTO account(budget_id, uuid, name) VALUES (?1, ?2, ?3) \
-            ON CONFLICT(uuid) DO UPDATE SET name=?3;",
-            params![budget_id, uuid, acc.name],
-        )?;
-    }
-    Ok(())
-}
-
-fn read_prompt_int(options: &Vec<usize>) -> usize {
+pub fn read_prompt_int(options: &Vec<usize>) -> usize {
     loop {
         io::stdout().flush().expect("stdout flush failed");
         let mut input = String::new();
@@ -107,7 +57,7 @@ fn read_prompt_int(options: &Vec<usize>) -> usize {
     }
 }
 
-fn prompt_budget(budgets: &Vec<BudgetSummary>) -> &BudgetSummary {
+pub fn prompt_budget(budgets: &Vec<BudgetSummary>) -> &BudgetSummary {
     println!("The following budgets were found for this account:");
     for (i, b) in budgets.iter().enumerate() {
         println!("[{}]: {}", i + 1, b.name);
@@ -117,7 +67,7 @@ fn prompt_budget(budgets: &Vec<BudgetSummary>) -> &BudgetSummary {
     &budgets[sel - 1]
 }
 
-fn create_dir_if_not_exists(path: &PathBuf) -> io::Result<()> {
+pub fn create_dir_if_not_exists(path: &PathBuf) -> io::Result<()> {
     match fs::create_dir(&path) {
         Ok(()) => {
             println!("Created {}", path.display());
@@ -133,7 +83,7 @@ fn create_dir_if_not_exists(path: &PathBuf) -> io::Result<()> {
     }
 }
 
-fn create_directories(
+pub fn create_directories(
     transaction_dir: &PathBuf,
     budget: &BudgetSummary,
     accounts: &Vec<Account>,
@@ -189,8 +139,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tx = conn.transaction()?;
 
-    let budget_id = insert_budget(&tx, budget)?;
-    insert_accounts(&tx, budget_id, &accounts)?;
+    let budget_id = budget::get_or_create(&tx, budget)?;
+    account::create_if_not_exists(&tx, budget_id, &accounts)?;
     config::set(&tx, config::USER_ID, &args.user_id)?;
     config::set(
         &tx,

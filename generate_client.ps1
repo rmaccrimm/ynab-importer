@@ -1,3 +1,4 @@
+docker pull openapitools/openapi-generator-cli
 docker run --rm -v ${PWD}:/local openapitools/openapi-generator-cli generate `
     -i /local/ynab_spec.yaml `
     -g rust  `
