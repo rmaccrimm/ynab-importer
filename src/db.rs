@@ -18,6 +18,12 @@ pub mod config {
             params![key, value],
         )
     }
+
+    // Get a value from configuration table
+    pub fn get(conn: &Connection, key: &str) -> Result<String, rusqlite::Error> {
+        conn.prepare("SELECT value FROM configuration WHERE key=?1;")?
+            .query_row(params![key], |row| row.get(0))
+    }
 }
 
 pub mod budget {

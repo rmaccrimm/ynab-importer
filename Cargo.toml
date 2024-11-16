@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1.41.1", features = ["full"] }
 uuid = { version = "1.11.0" }
-notify = { version = "6.1.1", features = ["serde"] }
+notify-debouncer-full = "0.4.0"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 refinery = { version = "0.8.14", features = ["rusqlite"] }
 clap = { version = "4.5.21", features = ["derive"] }

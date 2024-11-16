@@ -1,4 +1,6 @@
 /target
+# folder used for testing
+/downloads/
 
 ynab_spec.yaml
 db.sqlite3
