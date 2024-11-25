@@ -9,6 +9,7 @@ edition = "2021"
 chrono = { version = "0.4.38", features = ["serde"] }
 clap = { version = "4.5.21", features = ["derive"] }
 notify-debouncer-full = "0.4.0"
+pretty_assertions = "1.4.1"
 refinery = { version = "0.8.14", features = ["rusqlite"] }
 regex = "1.11.1"
 rusqlite = { version = "0.31.0", features = ["bundled"] }

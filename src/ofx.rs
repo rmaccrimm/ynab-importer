@@ -1,5 +1,5 @@
 use chrono;
-use chrono::{serde::ts_milliseconds, DateTime, NaiveDateTime, Utc};
+use chrono::{serde::ts_milliseconds, DateTime, NaiveDate, NaiveDateTime, Utc};
 use regex::Regex;
 use serde::{de, Deserialize, Deserializer};
 use sgmlish;
@@ -34,14 +34,14 @@ struct TransactionList {
     transactions: Vec<OfxTransaction>,
 }
 
-fn deserialize_datetime<'de, D>(deserializer: D) -> Result<NaiveDateTime, D::Error>
+fn deserialize_datetime<'de, D>(deserializer: D) -> Result<NaiveDate, D::Error>
 where
     D: Deserializer<'de>,
 {
     struct YMDStringVisitor;
 
     impl<'de> de::Visitor<'de> for YMDStringVisitor {
-        type Value = NaiveDateTime;
+        type Value = NaiveDate;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("a datetime string in the format %Y%m%d%H%M%S%.3f")
@@ -52,6 +52,7 @@ where
             E: de::Error,
         {
             NaiveDateTime::parse_from_str(v, "%Y%m%d%H%M%S%.3f")
+                .map(|dt| dt.date())
                 .map_err(|_| E::custom(format!("Failed to parse datetime: {}", v)))
         }
     }
@@ -59,13 +60,19 @@ where
     deserializer.deserialize_str(YMDStringVisitor)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
+pub enum TransactionKind {
+    DEBIT = 1,
+    CREDIT = 2,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
 pub struct OfxTransaction {
     #[serde(rename = "TRNTYPE")]
-    pub transaction_type: String,
+    pub transaction_kind: TransactionKind,
 
     #[serde(rename = "DTPOSTED", deserialize_with = "deserialize_datetime")]
-    pub date_posted: NaiveDateTime,
+    pub date_posted: NaiveDate,
 
     #[serde(rename = "TRNAMT")]
     pub amount: f64,
@@ -86,7 +93,7 @@ fn get_ofx_block(file_contents: &str) -> Option<&str> {
 
 pub fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
     let xml = get_ofx_block(file_contents).unwrap();
-    let sgml = sgmlish::Parser::builder().parse(xml)?;
+    let sgml = sgmlish::Parser::builder().uppercase_names().parse(xml)?;
     let sgml = sgmlish::transforms::normalize_end_tags(sgml)?;
     let result = sgmlish::from_fragment::<Ofx>(sgml)?;
     Ok(result
@@ -101,6 +108,7 @@ pub fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error>
 mod tests {
     use super::*;
     use chrono::NaiveDate;
+    use pretty_assertions::assert_eq;
 
     const SAMPLE: &str = "\
         OFXHEADER:100\
@@ -121,14 +129,14 @@ mod tests {
         20241102200000.000[-4:EDT]<DTEND>20241120190000.000[-5:EST]
         <STMTTRN>\
             <TRNTYPE>DEBIT\
-            <DTPOSTED>20241117120000.000\
+            <DTPOSTED>20241115120000.000\
             <TRNAMT>-0.5\
             <FITID>0000000000001\
             <NAME>PARKING PAY MACHINE\
         </STMTTRN>\
         <STMTTRN>\
             <TRNTYPE>DEBIT\
-            <DTPOSTED>20241117120000.000\
+            <DTPOSTED>20241116120000.000\
             <TRNAMT>-7.88\
             <FITID>0000000000002\
             <NAME>SQ ICECREAM\
@@ -136,7 +144,7 @@ mod tests {
         </STMTTRN>\
         <STMTTRN>\
             <TRNTYPE>DEBIT\
-            <DTPOSTED>20241117120000.000\
+            <DTPOSTED>20241116120000.000\
             <TRNAMT>-7.35\
             <FITID>0000000000003\
             <NAME>PIZZA RESTAURANT\
@@ -158,17 +166,38 @@ mod tests {
     #[test]
     fn test_parse() {
         let transactions = parse(&SAMPLE).unwrap();
-        println!("{transactions:#?}");
-    }
-
-    #[test]
-    fn test_chrono_deserialize() {
         assert_eq!(
-            NaiveDateTime::parse_from_str("20241117120000.000", "%Y%m%d%H%M%S%.3f").unwrap(),
-            NaiveDate::from_ymd_opt(2024, 11, 17)
-                .unwrap()
-                .and_hms_milli_opt(12, 0, 0, 0)
-                .unwrap()
+            transactions,
+            vec![
+                OfxTransaction {
+                    transaction_kind: TransactionKind::DEBIT,
+                    date_posted: NaiveDate::from_ymd_opt(2024, 11, 15).unwrap(),
+                    amount: -0.5,
+                    name: Some("PARKING PAY MACHINE".into()),
+                    memo: None,
+                },
+                OfxTransaction {
+                    transaction_kind: TransactionKind::DEBIT,
+                    date_posted: NaiveDate::from_ymd_opt(2024, 11, 16).unwrap(),
+                    amount: -7.88,
+                    name: Some("SQ ICECREAM".into()),
+                    memo: Some("Rewards earned: 0.04 ~ Category: Other".into()),
+                },
+                OfxTransaction {
+                    transaction_kind: TransactionKind::DEBIT,
+                    date_posted: NaiveDate::from_ymd_opt(2024, 11, 16).unwrap(),
+                    amount: -7.35,
+                    name: Some("PIZZA RESTAURANT".into()),
+                    memo: Some("Rewards earned: 0.04 ~ Category: Restaurant".into()),
+                },
+                OfxTransaction {
+                    transaction_kind: TransactionKind::DEBIT,
+                    date_posted: NaiveDate::from_ymd_opt(2024, 11, 12).unwrap(),
+                    amount: -8.91,
+                    name: Some("City Mall".into()),
+                    memo: Some("Rewards earned: 0.18 ~ Category: Entertainment".into()),
+                }
+            ]
         );
     }
 }
