@@ -1,16 +1,14 @@
 use notify_debouncer_full::notify::{
     event::{CreateKind, Event},
-    EventKind::{Access, Create, Modify, Other, Remove},
+    EventKind::Create,
     RecursiveMode,
 };
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent};
+use notify_debouncer_full::{new_debouncer, DebouncedEvent};
 use rusqlite::Connection;
 use std::{error::Error, fs};
-use std::{
-    sync::mpsc::{channel, Receiver},
-    time::Duration,
-};
-use ynab_importer::db::{account, budget, config};
+use std::{sync::mpsc::channel, time::Duration};
+use ynab_importer::db::config;
+use ynab_importer::ofx::parse;
 
 fn create_transactions(conn: &Connection, event: &Event) {
     if event.paths.len() == 0 {
@@ -19,9 +17,8 @@ fn create_transactions(conn: &Connection, event: &Event) {
     }
     match fs::read_to_string(&event.paths[0]) {
         Ok(content) => {
-            todo!();
-            // let qif = parse(&content, "%d/%m/%Y").expect("Failed to parse");
-            // println!("{:#?}", qif);
+            let transactions = parse(&content).unwrap();
+            println!("{transactions:#?}");
         }
         Err(_) => println!("Failed to read file"),
     }

@@ -64,6 +64,7 @@ where
 pub enum TransactionKind {
     DEBIT = 1,
     CREDIT = 2,
+    OTHER = 3,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
