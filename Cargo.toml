@@ -17,6 +17,7 @@ serde = "1.0.215"
 sgmlish = "0.2.0"
 tokio = { version = "1.41.1", features = ["full"] }
 uuid = "1.11.0"
+thiserror = "2.0.3"
 
 [dependencies.ynab_api]
 path = "api-lib"
