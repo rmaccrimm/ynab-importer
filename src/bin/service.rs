@@ -67,39 +67,48 @@ fn load_transactions(path: &PathBuf) -> Vec<OfxTransaction> {
     vec![]
 }
 
-fn get_budget_name_from_path(
+fn get_budget_and_account_from_path(
     basedir_path: &PathBuf,
     path: &PathBuf,
-) -> Result<OsString, ImportError> {
+) -> Result<(String, String), ImportError> {
     let mut display_path = String::new();
     write!(&mut display_path, "{}", path.display()).unwrap();
 
     let mut display_basedir = String::new();
     write!(&mut display_basedir, "{}", path.display()).unwrap();
 
-    let mut path = path.clone();
-    while path.parent() != None {
-        let parent = match path.parent() {
-            Some(p) => p,
-            None => {
-                break;
+    let mut new_path = PathBuf::new();
+    let mut level_count = 0;
+    let mut account_name = None;
+    let mut budget_name = None;
+
+    for comp in path.components() {
+        match comp {
+            std::path::Component::Prefix(_) => (),
+            std::path::Component::RootDir => {
+                new_path.push(comp.as_os_str());
+                new_path = new_path.canonicalize().unwrap();
             }
-        };
-        if parent == basedir_path {
-            match path.file_name() {
-                Some(p) => {
-                    return Ok(p.to_owned());
-                }
-                None => {
-                    break;
-                }
+            _ => {
+                new_path.push(comp.as_os_str());
             }
         }
-        if !path.pop() {
+        if level_count == 0 {
+            if &new_path == basedir_path {
+                level_count += 1;
+            }
+        } else if level_count == 1 {
+            budget_name = comp.as_os_str().to_str();
+            level_count += 1;
+        } else {
+            account_name = comp.as_os_str().to_str();
             break;
         }
     }
-    Err(ImportError::PathParsingError(display_path))
+    if budget_name.is_none() || account_name.is_none() {
+        return Err(ImportError::PathParsingError(display_path));
+    }
+    Ok((budget_name.unwrap().into(), account_name.unwrap().into()))
 }
 
 fn create_transactions(conn: &Connection, event: &DebouncedEvent) -> Result<(), ImportError> {
@@ -118,8 +127,8 @@ fn create_transactions(conn: &Connection, event: &DebouncedEvent) -> Result<(), 
     let base_dir = PathBuf::from(base_dir).canonicalize()?;
     println!("{:?}", base_dir);
 
-    let account_id = get_budget_name_from_path(&base_dir, path)?;
-    println!("{:?}", account_id);
+    let (budget_name, account_name) = get_budget_and_account_from_path(&base_dir, path)?;
+    println!("{:?}, {:?}", budget_name, account_name);
 
     return Ok(());
 
@@ -181,28 +190,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json;
 
     #[test]
     fn test_path_ops() {
-        let mut path = PathBuf::from(r"C:\Users\Roddy\Repos\ynab_importer\downloads\AppTestingBudget\Test MasterCard\madeup.QFX")
+        let path = PathBuf::from(r"C:\Users\Roddy\Repos\ynab_importer\downloads\AppTestingBudget\Test MasterCard\Chequing.QFX")
             .canonicalize()
             .unwrap();
-        println!("{:?}", path);
-        let download_dir = PathBuf::from(r"\\?\C:\Users\Roddy\Repos\ynab_importer\downloads");
-        let base_dir = download_dir.file_name().unwrap();
 
-        let mut subdir = None;
-        while path.parent() != None {
-            let parent = path.parent().unwrap().file_name().unwrap();
-            println!("{:?}", parent);
-            if parent == base_dir {
-                subdir = Some(path.file_name());
-                break;
-            }
-            if !path.pop() {
-                break;
-            }
-        }
-        println!("{:?}", subdir);
+        println!(
+            "{}",
+            serde_json::to_string(&path.as_os_str().to_os_string()).unwrap()
+        );
+        println!(
+            "{:?}",
+            serde_json::from_str::<OsString>(
+                &serde_json::to_string(&path.as_os_str().to_os_string()).unwrap()
+            )
+            .unwrap()
+        )
     }
 }
