@@ -145,6 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let budget_id = budget::get_or_create(&tx, budget)?;
     account::create_if_not_exists(&tx, budget_id, &accounts)?;
+    config::set_transaction_dir(&tx, &transaction_dir)?;
     config::set(&tx, config::USER_ID, &args.user_id)?;
     config::set(
         &tx,

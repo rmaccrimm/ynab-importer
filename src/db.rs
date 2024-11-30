@@ -3,7 +3,11 @@ use rusqlite::{params, Connection, OptionalExtension};
 use ynab_api::models::Account;
 use ynab_api::models::BudgetSummary;
 
+use anyhow::Result;
+
 pub mod config {
+    use std::{ffi::OsString, path::PathBuf};
+
     use super::*;
 
     pub const USER_ID: &str = "user_id";
@@ -11,22 +15,41 @@ pub mod config {
     pub const TRANSACTION_DIR: &str = "transaction_dir";
 
     // Set the key value pair in configuration table
-    pub fn set(conn: &Connection, key: &str, value: &str) -> Result<usize, rusqlite::Error> {
-        conn.execute(
+    pub fn set(conn: &Connection, key: &str, value: &str) -> Result<usize> {
+        let id = conn.execute(
             "INSERT INTO configuration(key, value) VALUES (?1, ?2) \
             ON CONFLICT(key) DO UPDATE SET value=?2;",
             params![key, value],
-        )
+        )?;
+        Ok(id)
     }
 
     // Get a value from configuration table
-    pub fn get(conn: &Connection, key: &str) -> Result<String, rusqlite::Error> {
-        conn.prepare("SELECT value FROM configuration WHERE key=?1;")?
-            .query_row(params![key], |row| row.get(0))
+    pub fn get(conn: &Connection, key: &str) -> Result<String> {
+        let s = conn
+            .prepare("SELECT value FROM configuration WHERE key=?1;")?
+            .query_row(params![key], |row| row.get(0))?;
+        Ok(s)
+    }
+
+    pub fn set_transaction_dir(conn: &Connection, path: &PathBuf) -> Result<usize> {
+        set(
+            conn,
+            TRANSACTION_DIR,
+            &serde_json::to_string(path.as_os_str())?,
+        )
+    }
+
+    pub fn get_transaction_dir(conn: &Connection) -> Result<PathBuf> {
+        let ser = get(conn, TRANSACTION_DIR)?;
+        let path = PathBuf::from(serde_json::from_str::<OsString>(&ser)?);
+        Ok(path)
     }
 }
 
 pub mod budget {
+    use uuid::Uuid;
+
     use super::*;
 
     // Gets the row id for the budget, creating a new row if one does not already exist.
@@ -51,9 +74,24 @@ pub mod budget {
             }
         }
     }
+
+    pub fn get_id(conn: &Connection, budget_name: &str) -> Result<i64> {
+        let mut stmt = conn.prepare("SELECT id FROM budget WHERE name = ?")?;
+        let result: i64 = stmt.query_row([&budget_name], |row| row.get(0))?;
+        Ok(result)
+    }
+
+    pub fn get_uuid(conn: &Connection, budget_name: &str) -> Result<Uuid> {
+        let mut stmt = conn.prepare("SELECT uuid FROM budget WHERE name = ?")?;
+        let result: String = stmt.query_row([&budget_name], |row| row.get(0))?;
+        let uuid = Uuid::parse_str(&result)?;
+        Ok(uuid)
+    }
 }
 
 pub mod account {
+    use uuid::Uuid;
+
     use super::*;
 
     pub fn create_if_not_exists(
@@ -71,4 +109,15 @@ pub mod account {
         }
         Ok(())
     }
+
+    pub fn get_uuid(conn: &Connection, budget_id: i64, account_name: &str) -> Result<Uuid> {
+        let mut stmt = conn.prepare("SELECT id FROM account WHERE name = ? AND budget_id = ?")?;
+        let result: String =
+            stmt.query_row(params![&account_name, &budget_id], |row| row.get(0))?;
+        let uuid = Uuid::parse_str(&result)?;
+        Ok(uuid)
+    }
 }
+
+#[cfg(test)]
+mod tests {}
