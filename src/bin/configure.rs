@@ -1,9 +1,10 @@
 use clap::Parser;
 use refinery::embed_migrations;
 use rusqlite::Connection;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio;
 use ynab_api::apis::configuration::Configuration;
 use ynab_api::apis::{accounts_api::get_accounts, budgets_api::get_budgets};
@@ -16,6 +17,8 @@ use std::io::Write;
 
 use ynab_api::models::Account;
 use ynab_api::models::BudgetSummary;
+
+use serde_json;
 
 embed_migrations!();
 
@@ -31,7 +34,7 @@ struct Args {
 
     // Folder to monitor for transaction exports
     #[arg(short, long)]
-    transaction_dir: PathBuf,
+    transaction_dir: OsString,
 }
 
 pub fn read_prompt_int(options: &Vec<usize>) -> usize {
@@ -103,8 +106,9 @@ pub fn create_directories(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let transaction_dir = PathBuf::from(args.transaction_dir).canonicalize()?;
 
-    if !fs::exists(args.transaction_dir.as_path())? {
+    if !fs::exists(&transaction_dir)? {
         return Err("Directory does not exist".into());
     }
 
@@ -135,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .data
         .accounts;
 
-    create_directories(&args.transaction_dir, budget, &accounts)?;
+    create_directories(&transaction_dir, budget, &accounts)?;
 
     let tx = conn.transaction()?;
 
@@ -145,11 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config::set(
         &tx,
         config::TRANSACTION_DIR,
-        &args
-            .transaction_dir
-            .canonicalize()?
-            .to_str()
-            .expect("Bad directory path provided"),
+        &serde_json::to_string(transaction_dir.as_os_str())?,
     )?;
     config::set(&tx, config::ACCESS_TOKEN, &token)?;
 
