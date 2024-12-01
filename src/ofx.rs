@@ -1,6 +1,6 @@
-use chrono;
-use chrono::{serde::ts_milliseconds, DateTime, NaiveDate, NaiveDateTime, Utc};
-use regex::Regex;
+use chrono::{self, FixedOffset, NaiveDateTime, ParseResult};
+use chrono::{DateTime, NaiveDate};
+use regex::{Captures, Regex};
 use serde::{de, Deserialize, Deserializer};
 use sgmlish;
 
@@ -34,6 +34,17 @@ struct TransactionList {
     transactions: Vec<OfxTransaction>,
 }
 
+fn parse_date(s: &str) -> ParseResult<NaiveDate> {
+    let re = Regex::new(r"(\.\d+)?\[([\+-])(\d+):[a-zA-Z]+\]").unwrap();
+    let s = re
+        .replace(s, |caps: &Captures| format!("{}{:0>2}", &caps[2], &caps[3]))
+        .to_string();
+
+    DateTime::parse_from_str(&s, r"%Y%m%d%H%M%S%#z")
+        .map(|dt| dt.date_naive())
+        .or_else(|_| NaiveDateTime::parse_from_str(&s, r"%Y%m%d%H%M%S%.3f").map(|dt| dt.date()))
+}
+
 fn deserialize_datetime<'de, D>(deserializer: D) -> Result<NaiveDate, D::Error>
 where
     D: Deserializer<'de>,
@@ -51,9 +62,7 @@ where
         where
             E: de::Error,
         {
-            NaiveDateTime::parse_from_str(v, "%Y%m%d%H%M%S%.3f")
-                .map(|dt| dt.date())
-                .map_err(|_| E::custom(format!("Failed to parse datetime: {}", v)))
+            parse_date(v).map_err(|_| E::custom(format!("Failed to parse datetime: {}", v)))
         }
     }
 
@@ -65,6 +74,7 @@ pub enum TransactionKind {
     DEBIT = 1,
     CREDIT = 2,
     OTHER = 3,
+    ATM = 4,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -94,7 +104,16 @@ fn get_ofx_block(file_contents: &str) -> Option<&str> {
 
 pub fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
     let xml = get_ofx_block(file_contents).unwrap();
-    let sgml = sgmlish::Parser::builder().uppercase_names().parse(xml)?;
+    let sgml = sgmlish::Parser::builder()
+        .uppercase_names()
+        .expand_entities(|entity| match entity {
+            "lt" => Some("<"),
+            "gt" => Some(">"),
+            "amp" => Some("&"),
+            "nbsp" => Some(" "),
+            _ => None,
+        })
+        .parse(xml)?;
     let sgml = sgmlish::transforms::normalize_end_tags(sgml)?;
     let result = sgmlish::from_fragment::<Ofx>(sgml)?;
     Ok(result
@@ -108,8 +127,9 @@ pub fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, TimeZone};
     use pretty_assertions::assert_eq;
+    use regex::Captures;
 
     const SAMPLE: &str = "\
         OFXHEADER:100\
@@ -199,6 +219,26 @@ mod tests {
                     memo: Some("Rewards earned: 0.18 ~ Category: Entertainment".into()),
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn test_parse_date() {
+        assert_eq!(
+            parse_date("20211217215753.211[-8:PST]").unwrap(),
+            NaiveDate::from_ymd_opt(2021, 12, 17).unwrap()
+        );
+        assert_eq!(
+            parse_date("20211130000000[-8:PST]").unwrap(),
+            NaiveDate::from_ymd_opt(2021, 11, 30).unwrap()
+        );
+        assert_eq!(
+            parse_date("20240731200000.000[-4:EDT]").unwrap(),
+            NaiveDate::from_ymd_opt(2024, 07, 31).unwrap()
+        );
+        assert_eq!(
+            parse_date("20241108120000.000").unwrap(),
+            NaiveDate::from_ymd_opt(2024, 11, 08).unwrap()
         );
     }
 }
