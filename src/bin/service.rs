@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use notify_debouncer_full::notify::Config;
 use notify_debouncer_full::notify::{event::CreateKind, EventKind::Create, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebouncedEvent};
 use rusqlite::Connection;
@@ -6,7 +7,10 @@ use std::fmt::Write;
 use std::fs;
 use std::path::PathBuf;
 use std::{sync::mpsc::channel, time::Duration};
-use ynab_api::models::{NewTransaction, TransactionClearedStatus};
+use tokio::main;
+use ynab_api::apis::configuration::Configuration;
+use ynab_api::apis::transactions_api::create_transaction;
+use ynab_api::models::{NewTransaction, PostTransactionsWrapper, TransactionClearedStatus};
 use ynab_importer::error::ImportError;
 use ynab_importer::ofx::parse;
 use ynab_importer::{
@@ -68,66 +72,100 @@ fn milli_dollar_amount(amount: f64) -> i64 {
     (amount * 1000.0).round() as i64
 }
 
-fn create_transactions(conn: &Connection, event: &DebouncedEvent) -> Result<()> {
-    if event.paths.len() == 0 {
-        return Err(ImportError::NoPathError.into());
-    }
-    let path = &event.paths[0];
-    let base_dir = config::get_transaction_dir(conn)?;
-    let (budget_name, account_name) = get_budget_and_account_from_path(&base_dir, path)?;
-
-    let budget_id =
-        budget::get_id(conn, &budget_name).with_context(|| "failed to load budget id")?;
-    let account_id = account::get_uuid(conn, budget_id, &account_name)
-        .with_context(|| "failed to load account")?;
-
-    let new_transactions = load_transactions(path)?
-        .into_iter()
-        .map(|t| NewTransaction {
-            account_id: Some(account_id),
-            date: Some(t.date_posted.to_string()),
-            amount: Some(milli_dollar_amount(t.amount)),
-            payee_id: None,
-            payee_name: Some(t.name.clone()),
-            category_id: None,
-            memo: Some(t.memo.clone()),
-            cleared: Some(TransactionClearedStatus::Cleared),
-            approved: None,
-            flag_color: None,
-            subtransactions: None,
-            import_id: None,
-        });
-    println!("{:#?}", new_transactions);
-    Ok(())
+pub struct EventHandler {
+    db_conn: Connection,
+    api_config: Configuration,
 }
 
-// fn get_budget_and_account_for_path
-fn event_handler(conn: &Connection, event: &DebouncedEvent) -> Result<()> {
-    match event.kind {
-        Create(CreateKind::File) | Create(CreateKind::Any) => create_transactions(&conn, &event),
-        _ => {
-            println!("Ignored event {:?}", event);
-            Ok(())
+impl EventHandler {
+    pub fn new(db_conn: Connection) -> Result<Self> {
+        let access_token = config::get(&db_conn, config::ACCESS_TOKEN)?;
+        let mut api_config = Configuration::new();
+        api_config.bearer_access_token = Some(access_token);
+        Ok({
+            EventHandler {
+                db_conn,
+                api_config,
+            }
+        })
+    }
+
+    async fn create_transactions(&self, event: &DebouncedEvent) -> Result<()> {
+        if event.paths.len() == 0 {
+            return Err(ImportError::NoPathError.into());
+        }
+        let path = &event.paths[0];
+        let base_dir = config::get_transaction_dir(&self.db_conn)?;
+        let (budget_name, account_name) = get_budget_and_account_from_path(&base_dir, path)?;
+
+        let budget_id = budget::get_id(&self.db_conn, &budget_name)
+            .with_context(|| format!("failed to load budget id for {}", budget_name))?;
+        let account_id = account::get_uuid(&self.db_conn, budget_id, &account_name)
+            .with_context(|| format!("failed to load account for {}", account_name))?;
+
+        let new_transactions: Vec<NewTransaction> = load_transactions(path)?
+            .into_iter()
+            .map(|t| NewTransaction {
+                account_id: Some(account_id),
+                date: Some(t.date_posted.to_string()),
+                amount: Some(milli_dollar_amount(t.amount)),
+                payee_id: None,
+                payee_name: Some(t.name.clone()),
+                category_id: None,
+                memo: Some(t.memo.clone()),
+                cleared: Some(TransactionClearedStatus::Cleared),
+                approved: None,
+                flag_color: None,
+                subtransactions: None,
+                import_id: None,
+            })
+            .collect();
+
+        let budget_uuid = budget::get_uuid(&self.db_conn, &budget_name)?;
+
+        let resp = create_transaction(
+            &self.api_config,
+            &budget_uuid.hyphenated().to_string(),
+            PostTransactionsWrapper {
+                transaction: None,
+                transactions: Some(new_transactions),
+            },
+        )
+        .await?;
+        println!("{:#?}", resp.data);
+
+        Ok(())
+    }
+
+    pub async fn handle(&self, event: &DebouncedEvent) -> Result<()> {
+        match event.kind {
+            Create(CreateKind::File) | Create(CreateKind::Any) => {
+                self.create_transactions(event).await
+            }
+            _ => {
+                println!("Ignored event {:?}", event);
+                Ok(())
+            }
         }
     }
 }
 
-fn main() -> Result<()> {
-    let conn = Connection::open("./db.sqlite3")?;
-
+#[tokio::main]
+async fn main() -> Result<()> {
+    let db_conn = Connection::open("./db.sqlite3")?;
     let (tx, rx) = channel();
     let mut debouncer = new_debouncer(Duration::from_secs(2), None, tx)?;
+    let watch_dir = config::get_transaction_dir(&db_conn)?;
+    let event_handler = EventHandler::new(db_conn)?;
 
-    let watch_dir = config::get_transaction_dir(&conn)?;
     debouncer.watch(&watch_dir, RecursiveMode::Recursive)?;
-
     for res in rx {
         match res {
             Ok(events) => {
                 for event in events.iter() {
-                    match event_handler(&conn, event) {
+                    match event_handler.handle(event).await {
                         Err(err) => {
-                            println!("{}", err.to_string());
+                            println!("{:?}", err);
                         }
                         _ => (),
                     };

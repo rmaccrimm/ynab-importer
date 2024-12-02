@@ -111,7 +111,7 @@ pub mod account {
     }
 
     pub fn get_uuid(conn: &Connection, budget_id: i64, account_name: &str) -> Result<Uuid> {
-        let mut stmt = conn.prepare("SELECT id FROM account WHERE name = ? AND budget_id = ?")?;
+        let mut stmt = conn.prepare("SELECT uuid FROM account WHERE name = ? AND budget_id = ?")?;
         let result: String =
             stmt.query_row(params![&account_name, &budget_id], |row| row.get(0))?;
         let uuid = Uuid::parse_str(&result)?;
