@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
+use chrono::NaiveDate;
 use notify_debouncer_full::notify::Config;
 use notify_debouncer_full::notify::{event::CreateKind, EventKind::Create, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebouncedEvent};
 use rusqlite::Connection;
-use std::fmt::Write;
+use std::collections::HashMap;
+use std::fmt::{write, Write};
 use std::fs;
 use std::path::PathBuf;
 use std::{sync::mpsc::channel, time::Duration};
@@ -77,6 +79,23 @@ pub struct EventHandler {
     api_config: Configuration,
 }
 
+fn generate_transaction_id(
+    date: Option<NaiveDate>,
+    amount_milis: Option<i64>,
+    occurence: Option<usize>,
+) -> String {
+    let mut s = String::new();
+    write!(
+        &mut s,
+        "ynab_importer:{}:{}:{}",
+        date.map_or_else(|| String::from("none"), |dt| dt.to_string()),
+        amount_milis.map_or_else(|| String::from("none"), |dt| dt.to_string()),
+        occurence.map_or_else(|| String::from("none"), |dt| dt.to_string()),
+    )
+    .unwrap();
+    s
+}
+
 impl EventHandler {
     pub fn new(db_conn: Connection) -> Result<Self> {
         let access_token = config::get(&db_conn, config::ACCESS_TOKEN)?;
@@ -103,12 +122,27 @@ impl EventHandler {
         let account_id = account::get_uuid(&self.db_conn, budget_id, &account_name)
             .with_context(|| format!("failed to load account for {}", account_name))?;
 
-        let new_transactions: Vec<NewTransaction> = load_transactions(path)?
-            .into_iter()
-            .map(|t| NewTransaction {
+        let mut count_map = HashMap::new();
+        let mut new_transactions = Vec::new();
+
+        for t in load_transactions(path)?.into_iter() {
+            let amount_milli = milli_dollar_amount(t.amount);
+            let key = (t.date_posted, amount_milli);
+            let mut id_string = String::new();
+
+            if !count_map.contains_key(&key) {
+                write!(id_string, "ynab_importer:{}:{}:{}", key.0, key.1, 1).unwrap();
+                count_map.insert(key, 1);
+            } else {
+                let count = count_map.get(&key).unwrap() + 1;
+                write!(id_string, "ynab_importer:{}:{}:{}", key.0, key.1, count).unwrap();
+                count_map.insert(key, count);
+            }
+
+            new_transactions.push(NewTransaction {
                 account_id: Some(account_id),
                 date: Some(t.date_posted.to_string()),
-                amount: Some(milli_dollar_amount(t.amount)),
+                amount: Some(amount_milli),
                 payee_id: None,
                 payee_name: Some(t.name.clone()),
                 category_id: None,
@@ -117,12 +151,11 @@ impl EventHandler {
                 approved: None,
                 flag_color: None,
                 subtransactions: None,
-                import_id: None,
-            })
-            .collect();
+                import_id: Some(Some(id_string)),
+            });
+        }
 
         let budget_uuid = budget::get_uuid(&self.db_conn, &budget_name)?;
-
         let resp = create_transaction(
             &self.api_config,
             &budget_uuid.hyphenated().to_string(),
@@ -178,4 +211,20 @@ async fn main() -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use ynab_api::apis::transactions_api::get_transactions_by_account;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_code() {
+        let db_conn = Connection::open("./db.sqlite3").unwrap();
+        let access_token = config::get(&db_conn, config::ACCESS_TOKEN).unwrap();
+        let mut api_config = Configuration::new();
+        api_config.bearer_access_token = Some(access_token);
+        let ts = get_transactions_by_account(&api_config, "", "", None, None, None)
+            .await
+            .unwrap();
+        println!("{:#?}", ts);
+    }
+}
