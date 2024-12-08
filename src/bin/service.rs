@@ -3,13 +3,14 @@ use chrono::NaiveDate;
 use notify_debouncer_full::notify::Config;
 use notify_debouncer_full::notify::{event::CreateKind, EventKind::Create, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebouncedEvent};
+use refinery::embed_migrations;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::fmt::{write, Write};
 use std::fs;
 use std::path::PathBuf;
 use std::{sync::mpsc::channel, time::Duration};
-use tokio::main;
+use tokio;
 use ynab_api::apis::configuration::Configuration;
 use ynab_api::apis::transactions_api::create_transaction;
 use ynab_api::models::{NewTransaction, PostTransactionsWrapper, TransactionClearedStatus};
@@ -19,6 +20,8 @@ use ynab_importer::{
     db::{account, budget, config},
     ofx::OfxTransaction,
 };
+
+embed_migrations!();
 
 fn load_transactions(path: &PathBuf) -> Result<Vec<OfxTransaction>> {
     let content = fs::read_to_string(path)?;
@@ -185,7 +188,9 @@ impl EventHandler {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let db_conn = Connection::open("./db.sqlite3")?;
+    let mut db_conn = Connection::open("./db.sqlite3")?;
+    migrations::runner().run(&mut db_conn)?;
+
     let (tx, rx) = channel();
     let mut debouncer = new_debouncer(Duration::from_secs(2), None, tx)?;
     let watch_dir = config::get_transaction_dir(&db_conn)?;

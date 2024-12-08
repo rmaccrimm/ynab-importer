@@ -5,16 +5,18 @@ CREATE TABLE budget (
 );
 
 CREATE TABLE account (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     budget_id INTEGER NOT NULL REFERENCES budget(id),
     uuid TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL
 );
 
-CREATE TABLE import_log (
-    budget_id INTEGER NOT NULL REFERENCES budget(id),
-    file_name TEXT,
-    transaction_ids TEXT,
-    insert_datetime DATETIME DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE transaction_import (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    amount INTEGER NOT NULL,
+    date_posted TEXT NOT NULL,
+    account_id INTEGER NOT NULL REFERENCES account(id),
+    UNIQUE(amount, date_posted, account_id)
 );
 
 CREATE TABLE configuration (

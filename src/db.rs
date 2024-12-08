@@ -53,10 +53,7 @@ pub mod budget {
     use super::*;
 
     // Gets the row id for the budget, creating a new row if one does not already exist.
-    pub fn get_or_create(
-        conn: &Connection,
-        budget_summary: &BudgetSummary,
-    ) -> Result<i64, rusqlite::Error> {
+    pub fn get_or_create(conn: &Connection, budget_summary: &BudgetSummary) -> Result<i64> {
         let uuid = budget_summary.id.hyphenated().to_string();
         let mut stmt = conn.prepare("SELECT id FROM budget WHERE uuid = ?")?;
         match stmt
@@ -98,7 +95,7 @@ pub mod account {
         conn: &Connection,
         budget_id: i64,
         accounts: &Vec<Account>,
-    ) -> Result<(), rusqlite::Error> {
+    ) -> Result<()> {
         for acc in accounts.iter() {
             let uuid = acc.id.hyphenated().to_string();
             conn.execute(
@@ -119,5 +116,40 @@ pub mod account {
     }
 }
 
-#[cfg(test)]
-mod tests {}
+pub mod transaction {
+    use chrono::NaiveDate;
+
+    use super::*;
+
+    pub fn exists(
+        conn: &Connection,
+        account_id: i32,
+        amount_milli: i32,
+        date_posted: NaiveDate,
+    ) -> Result<bool> {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM transaction_import \
+            WHERE acccount_id = ? AND amount = ? AND date_posted = ?",
+        )?;
+        let result: Option<i32> = stmt
+            .query_row(
+                params![account_id, amount_milli, date_posted.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(result.is_some())
+    }
+
+    pub fn create(
+        conn: &Connection,
+        account_id: i32,
+        amount_milli: i32,
+        date_posted: NaiveDate,
+    ) -> Result<()> {
+        conn.execute(
+            "INSERT INTO transaction_log(account_id, amount, date_posted) VALUES (?, ?, ?)",
+            params![account_id, amount_milli, date_posted.to_string()],
+        )?;
+        Ok(())
+    }
+}
