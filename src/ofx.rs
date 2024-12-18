@@ -1,4 +1,9 @@
-use chrono::{self, FixedOffset, NaiveDateTime, ParseResult};
+use std::fs;
+use std::path::PathBuf;
+
+use super::error::ImportError;
+use anyhow::Result;
+use chrono::{self, NaiveDateTime, ParseResult};
 use chrono::{DateTime, NaiveDate};
 use regex::{Captures, Regex};
 use serde::{de, Deserialize, Deserializer};
@@ -102,7 +107,7 @@ fn get_ofx_block(file_contents: &str) -> Option<&str> {
     Some(&file_contents[m.start()..])
 }
 
-pub fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
+fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
     let xml = get_ofx_block(file_contents).unwrap();
     let sgml = sgmlish::Parser::builder()
         .uppercase_names()
@@ -124,12 +129,17 @@ pub fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error>
         .transactions)
 }
 
+pub fn load_transactions(path: &PathBuf) -> Result<Vec<OfxTransaction>> {
+    let content = fs::read_to_string(path)?;
+    let ts = parse(&content).map_err(|err| ImportError::from(err))?;
+    Ok(ts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{NaiveDate, TimeZone};
+    use chrono::NaiveDate;
     use pretty_assertions::assert_eq;
-    use regex::Captures;
 
     const SAMPLE: &str = "\
         OFXHEADER:100\

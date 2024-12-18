@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
-use notify_debouncer_full::notify::Config;
+
 use notify_debouncer_full::notify::{event::CreateKind, EventKind::Create, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebouncedEvent};
 use refinery::embed_migrations;
 use rusqlite::Connection;
 use std::collections::HashMap;
-use std::fmt::{write, Write};
-use std::fs;
+use std::fmt::Write;
+
 use std::path::PathBuf;
 use std::{sync::mpsc::channel, time::Duration};
 use tokio;
@@ -15,19 +15,12 @@ use ynab_api::apis::configuration::Configuration;
 use ynab_api::apis::transactions_api::create_transaction;
 use ynab_api::models::{NewTransaction, PostTransactionsWrapper, TransactionClearedStatus};
 use ynab_importer::error::ImportError;
-use ynab_importer::ofx::parse;
 use ynab_importer::{
     db::{account, budget, config},
-    ofx::OfxTransaction,
+    ofx::load_transactions,
 };
 
 embed_migrations!();
-
-fn load_transactions(path: &PathBuf) -> Result<Vec<OfxTransaction>> {
-    let content = fs::read_to_string(path)?;
-    let ts = parse(&content).map_err(|err| ImportError::from(err))?;
-    Ok(ts)
-}
 
 fn get_budget_and_account_from_path(
     basedir_path: &PathBuf,
@@ -77,26 +70,29 @@ fn milli_dollar_amount(amount: f64) -> i64 {
     (amount * 1000.0).round() as i64
 }
 
+#[derive(Hash, Clone, PartialEq, Eq)]
+pub struct TransactionKey {
+    date: NaiveDate,
+    amount_millis: i64,
+    occurrence: usize,
+}
+
+impl TransactionKey {
+    pub fn get_id(&self) -> String {
+        let mut s = String::new();
+        write!(
+            s,
+            "ynab_importer:{}:{}:{}",
+            self.date, self.amount_millis, self.occurrence
+        )
+        .unwrap();
+        s
+    }
+}
+
 pub struct EventHandler {
     db_conn: Connection,
     api_config: Configuration,
-}
-
-fn generate_transaction_id(
-    date: Option<NaiveDate>,
-    amount_milis: Option<i64>,
-    occurence: Option<usize>,
-) -> String {
-    let mut s = String::new();
-    write!(
-        &mut s,
-        "ynab_importer:{}:{}:{}",
-        date.map_or_else(|| String::from("none"), |dt| dt.to_string()),
-        amount_milis.map_or_else(|| String::from("none"), |dt| dt.to_string()),
-        occurence.map_or_else(|| String::from("none"), |dt| dt.to_string()),
-    )
-    .unwrap();
-    s
 }
 
 impl EventHandler {
@@ -112,7 +108,7 @@ impl EventHandler {
         })
     }
 
-    async fn create_transactions(&self, event: &DebouncedEvent) -> Result<()> {
+    async fn create_transactions_with_retry(&self, event: &DebouncedEvent) -> Result<()> {
         if event.paths.len() == 0 {
             return Err(ImportError::NoPathError.into());
         }
@@ -125,27 +121,26 @@ impl EventHandler {
         let account_id = account::get_uuid(&self.db_conn, budget_id, &account_name)
             .with_context(|| format!("failed to load account for {}", account_name))?;
 
-        let mut count_map = HashMap::new();
+        let mut transaction_map = HashMap::new();
         let mut new_transactions = Vec::new();
 
         for t in load_transactions(path)?.into_iter() {
-            let amount_milli = milli_dollar_amount(t.amount);
-            let key = (t.date_posted, amount_milli);
-            let mut id_string = String::new();
-
-            if !count_map.contains_key(&key) {
-                write!(id_string, "ynab_importer:{}:{}:{}", key.0, key.1, 1).unwrap();
-                count_map.insert(key, 1);
-            } else {
-                let count = count_map.get(&key).unwrap() + 1;
-                write!(id_string, "ynab_importer:{}:{}:{}", key.0, key.1, count).unwrap();
-                count_map.insert(key, count);
+            let amount_millis = milli_dollar_amount(t.amount);
+            let mut key = TransactionKey {
+                date: t.date_posted,
+                amount_millis,
+                occurrence: 1,
+            };
+            let mut import_id = key.get_id();
+            while transaction_map.contains_key(&import_id) {
+                key.occurrence += 1;
+                import_id = key.get_id();
             }
 
-            new_transactions.push(NewTransaction {
+            let new_transaction = NewTransaction {
                 account_id: Some(account_id),
                 date: Some(t.date_posted.to_string()),
-                amount: Some(amount_milli),
+                amount: Some(amount_millis),
                 payee_id: None,
                 payee_name: Some(t.name.clone()),
                 category_id: None,
@@ -154,29 +149,57 @@ impl EventHandler {
                 approved: None,
                 flag_color: None,
                 subtransactions: None,
-                import_id: Some(Some(id_string)),
-            });
+                import_id: Some(Some(import_id.clone())),
+            };
+            transaction_map.insert(import_id, (key, new_transaction.clone()));
+            new_transactions.push(new_transaction);
         }
 
         let budget_uuid = budget::get_uuid(&self.db_conn, &budget_name)?;
-        let resp = create_transaction(
+        let mut resp = create_transaction(
             &self.api_config,
             &budget_uuid.hyphenated().to_string(),
             PostTransactionsWrapper {
                 transaction: None,
-                transactions: Some(new_transactions),
+                transactions: Some(new_transactions.clone()),
             },
         )
         .await?;
         println!("{:#?}", resp.data);
 
+        while resp.data.duplicate_import_ids.is_some() {
+            new_transactions.clear();
+            for import_id in resp.data.duplicate_import_ids.unwrap() {
+                let (key, transaction) = transaction_map.get(&import_id).unwrap();
+                let mut new_key = key.clone();
+                new_key.occurrence += 1;
+                let import_id = new_key.get_id();
+
+                let new_transaction = NewTransaction {
+                    import_id: Some(Some(import_id.clone())),
+                    ..transaction.clone()
+                };
+                transaction_map.insert(import_id, (new_key, new_transaction.clone()));
+                new_transactions.push(new_transaction);
+            }
+            resp = create_transaction(
+                &self.api_config,
+                &budget_uuid.hyphenated().to_string(),
+                PostTransactionsWrapper {
+                    transaction: None,
+                    transactions: Some(new_transactions.clone()),
+                },
+            )
+            .await?;
+            println!("{:#?}", resp.data);
+        }
         Ok(())
     }
 
     pub async fn handle(&self, event: &DebouncedEvent) -> Result<()> {
         match event.kind {
             Create(CreateKind::File) | Create(CreateKind::Any) => {
-                self.create_transactions(event).await
+                self.create_transactions_with_retry(event).await
             }
             _ => {
                 println!("Ignored event {:?}", event);
@@ -213,23 +236,4 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use ynab_api::apis::transactions_api::get_transactions_by_account;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn test_code() {
-        let db_conn = Connection::open("./db.sqlite3").unwrap();
-        let access_token = config::get(&db_conn, config::ACCESS_TOKEN).unwrap();
-        let mut api_config = Configuration::new();
-        api_config.bearer_access_token = Some(access_token);
-        let ts = get_transactions_by_account(&api_config, "", "", None, None, None)
-            .await
-            .unwrap();
-        println!("{:#?}", ts);
-    }
 }
