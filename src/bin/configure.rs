@@ -1,22 +1,19 @@
 use clap::Parser;
 use refinery::embed_migrations;
+use rusqlite;
 use rusqlite::Connection;
 use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::PathBuf;
 use tokio;
 use ynab_api::apis::configuration::Configuration;
 use ynab_api::apis::{accounts_api::get_accounts, budgets_api::get_budgets};
-use ynab_importer::db::{account, budget, config};
-
-use rusqlite;
-
-use std::io;
-use std::io::Write;
-
 use ynab_api::models::Account;
 use ynab_api::models::BudgetSummary;
+use ynab_importer::db::{account, budget, config};
 
 use serde_json;
 
