@@ -3,6 +3,7 @@ use super::{
     db::{account, budget, config},
     ofx::load_transactions,
 };
+use crate::db::transaction;
 use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
 use notify_debouncer_full::notify::{event::CreateKind, EventKind::Create};
@@ -113,7 +114,7 @@ impl EventHandler {
 
         let budget_id = budget::get_id(&self.db_conn, &budget_name)
             .with_context(|| format!("failed to load budget id for {}", budget_name))?;
-        let account_id = account::get_uuid(&self.db_conn, budget_id, &account_name)
+        let account = account::get(&self.db_conn, budget_id, &account_name)
             .with_context(|| format!("failed to load account for {}", account_name))?;
 
         let mut transaction_map = HashMap::new();
@@ -126,6 +127,13 @@ impl EventHandler {
                 amount_millis,
                 occurrence: 1,
             };
+            if transaction::exists(&self.db_conn, account.id, amount_millis, key.date)? {
+                println!(
+                    "Transaction with amount ${} on {} already imported. Skipping",
+                    t.amount, key.date
+                );
+                continue;
+            }
             let mut import_id = key.get_id();
             while transaction_map.contains_key(&import_id) {
                 key.occurrence += 1;
@@ -133,7 +141,7 @@ impl EventHandler {
             }
 
             let new_transaction = NewTransaction {
-                account_id: Some(account_id),
+                account_id: Some(account.uuid),
                 date: Some(t.date_posted.to_string()),
                 amount: Some(amount_millis),
                 payee_id: None,
@@ -149,41 +157,11 @@ impl EventHandler {
             transaction_map.insert(import_id, (key, new_transaction.clone()));
             new_transactions.push(new_transaction);
         }
-
         let budget_uuid = budget::get_uuid(&self.db_conn, &budget_name)?;
-        let mut resp = create_transaction(
-            &self.api_config,
-            &budget_uuid.hyphenated().to_string(),
-            PostTransactionsWrapper {
-                transaction: None,
-                transactions: Some(new_transactions.clone()),
-            },
-        )
-        .await?;
-        println!("{:#?}", resp);
-        let mut retry = 0;
-        while resp.data.duplicate_import_ids.is_some() {
-            if retry == self.max_retries {
-                return Err(anyhow!(
-                    "One or more transactions were not succesfully imported, {:#?}",
-                    resp.data.duplicate_import_ids.unwrap()
-                ));
-            }
-            new_transactions.clear();
-            for import_id in resp.data.duplicate_import_ids.unwrap() {
-                let (key, transaction) = transaction_map.get(&import_id).unwrap();
-                let mut new_key = key.clone();
-                new_key.occurrence += 1;
-                let import_id = new_key.get_id();
 
-                let new_transaction = NewTransaction {
-                    import_id: Some(Some(import_id.clone())),
-                    ..transaction.clone()
-                };
-                transaction_map.insert(import_id, (new_key, new_transaction.clone()));
-                new_transactions.push(new_transaction);
-            }
-            resp = create_transaction(
+        let mut retry = 0;
+        loop {
+            let resp = create_transaction(
                 &self.api_config,
                 &budget_uuid.hyphenated().to_string(),
                 PostTransactionsWrapper {
@@ -192,8 +170,54 @@ impl EventHandler {
                 },
             )
             .await?;
-            println!("{:#?}", resp);
-            retry += 1;
+            println!("{:?}", resp);
+            new_transactions.clear();
+
+            match resp.data.transactions {
+                Some(transactions) => {
+                    for saved_transaction in transactions.iter() {
+                        let (key, _) = transaction_map
+                            .get(&saved_transaction.import_id.clone().unwrap().unwrap())
+                            .unwrap();
+
+                        transaction::create_if_not_exists(
+                            &self.db_conn,
+                            account.id,
+                            key.amount_millis,
+                            key.date,
+                        )?;
+                    }
+                }
+                None => (),
+            }
+
+            match resp.data.duplicate_import_ids {
+                None => {
+                    break;
+                }
+                Some(ids) => {
+                    if retry == self.max_retries {
+                        return Err(anyhow!(
+                            "One or more transactions were not succesfully imported, {:#?}",
+                            ids
+                        ));
+                    }
+                    for import_id in ids {
+                        let (key, transaction) = transaction_map.get(&import_id).unwrap();
+                        let mut new_key = key.clone();
+                        new_key.occurrence += 1;
+                        let import_id = new_key.get_id();
+
+                        let new_transaction = NewTransaction {
+                            import_id: Some(Some(import_id.clone())),
+                            ..transaction.clone()
+                        };
+                        transaction_map.insert(import_id, (new_key, new_transaction.clone()));
+                        new_transactions.push(new_transaction);
+                    }
+                    retry += 1;
+                }
+            }
         }
         Ok(())
     }

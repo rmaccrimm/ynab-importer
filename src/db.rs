@@ -141,10 +141,10 @@ pub mod account {
     }
 
     pub struct AccountRow {
-        id: i64,
-        budget_id: i64,
-        uuid: Uuid,
-        name: String,
+        pub id: i64,
+        pub budget_id: i64,
+        pub uuid: Uuid,
+        pub name: String,
     }
 
     pub fn get(conn: &Connection, budget_id: i64, account_name: &str) -> Result<AccountRow> {
@@ -170,8 +170,8 @@ pub mod transaction {
 
     pub fn exists(
         conn: &Connection,
-        account_id: i32,
-        amount_milli: i32,
+        account_id: i64,
+        amount_milli: i64,
         date_posted: NaiveDate,
     ) -> Result<bool> {
         let mut stmt = conn.prepare(
@@ -187,14 +187,15 @@ pub mod transaction {
         Ok(result.is_some())
     }
 
-    pub fn create(
+    pub fn create_if_not_exists(
         conn: &Connection,
-        account_id: i32,
-        amount_milli: i32,
+        account_id: i64,
+        amount_milli: i64,
         date_posted: NaiveDate,
     ) -> Result<()> {
         conn.execute(
-            "INSERT INTO transaction_log(account_id, amount, date_posted) VALUES (?, ?, ?)",
+            "INSERT INTO transaction_import(account_id, amount, date_posted) VALUES (?, ?, ?) \
+            ON CONFLICT(amount, date_posted, account_id) DO NOTHING;",
             params![account_id, amount_milli, date_posted.to_string()],
         )?;
         Ok(())
