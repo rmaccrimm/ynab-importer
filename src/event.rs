@@ -132,9 +132,10 @@ impl EventHandler {
         let base_dir = config::get_transaction_dir(&self.db_conn)?;
         let (budget_name, account_name) = get_budget_and_account_from_path(&base_dir, path)?;
 
-        let budget_id = budget::get_id(&self.db_conn, &budget_name)
-            .with_context(|| format!("failed to load budget id for {}", budget_name))?;
-        let account = account::get(&self.db_conn, budget_id, &account_name)
+        let budget = budget::with_name(&self.db_conn, &budget_name)
+            .with_context(|| format!("failed to load budget row for {}", budget_name))?;
+
+        let account = account::with_budget_and_name(&self.db_conn, budget.id, &account_name)
             .with_context(|| format!("failed to load account for {}", account_name))?;
 
         let mut transaction_map = HashMap::new();
@@ -167,13 +168,12 @@ impl EventHandler {
             transaction_map.insert(import_id, (key, new_transaction.clone()));
             new_transactions.push(new_transaction);
         }
-        let budget_uuid = budget::get_uuid(&self.db_conn, &budget_name)?;
 
         let mut retry = 0;
         loop {
             let resp = create_transaction(
                 &self.api_config,
-                &budget_uuid.hyphenated().to_string(),
+                &budget.uuid.hyphenated().to_string(),
                 PostTransactionsWrapper {
                     transaction: None,
                     transactions: Some(new_transactions.clone()),

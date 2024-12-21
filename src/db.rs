@@ -8,7 +8,7 @@ use ynab_api::models::BudgetSummary;
 use anyhow::Result;
 
 // Wrapper around Uuid that can be saved/loaded from sqlite db automatically
-pub struct DbUuid(pub Uuid);
+struct DbUuid(pub Uuid);
 
 impl Into<Uuid> for DbUuid {
     fn into(self) -> Uuid {
@@ -85,6 +85,12 @@ pub mod budget {
 
     use super::*;
 
+    pub struct BudgetRow {
+        pub id: i64,
+        pub uuid: Uuid,
+        pub name: String,
+    }
+
     // Gets the row id for the budget, creating a new row if one does not already exist.
     pub fn get_or_create(conn: &Connection, budget_summary: &BudgetSummary) -> Result<i64> {
         let uuid = DbUuid(budget_summary.id);
@@ -105,17 +111,28 @@ pub mod budget {
         }
     }
 
-    pub fn get_id(conn: &Connection, budget_name: &str) -> Result<i64> {
-        let mut stmt = conn.prepare("SELECT id FROM budget WHERE name = ?")?;
-        let result: i64 = stmt.query_row([&budget_name], |row| row.get(0))?;
+    pub fn get(conn: &Connection, budget_id: i64) -> Result<BudgetRow> {
+        let mut stmt = conn.prepare("SELECT id, uuid, name FROM budget WHERE id = ?")?;
+        let result: BudgetRow = stmt.query_row([budget_id], |row| {
+            Ok(BudgetRow {
+                id: row.get(0)?,
+                uuid: row.get::<usize, DbUuid>(1)?.into(),
+                name: row.get(2)?,
+            })
+        })?;
         Ok(result)
     }
 
-    pub fn get_uuid(conn: &Connection, budget_name: &str) -> Result<Uuid> {
-        let mut stmt = conn.prepare("SELECT uuid FROM budget WHERE name = ?")?;
-        let result: String = stmt.query_row([&budget_name], |row| row.get(0))?;
-        let uuid = Uuid::parse_str(&result)?;
-        Ok(uuid)
+    pub fn with_name(conn: &Connection, budget_name: &str) -> Result<BudgetRow> {
+        let mut stmt = conn.prepare("SELECT id, uuid, name FROM budget WHERE name = ?")?;
+        let result: BudgetRow = stmt.query_row([&budget_name], |row| {
+            Ok(BudgetRow {
+                id: row.get(0)?,
+                uuid: row.get::<usize, DbUuid>(1)?.into(),
+                name: row.get(2)?,
+            })
+        })?;
+        Ok(result)
     }
 }
 
@@ -123,6 +140,13 @@ pub mod account {
     use uuid::Uuid;
 
     use super::*;
+
+    pub struct AccountRow {
+        pub id: i64,
+        pub budget_id: i64,
+        pub uuid: Uuid,
+        pub name: String,
+    }
 
     pub fn create_if_not_exists(
         conn: &Connection,
@@ -140,14 +164,11 @@ pub mod account {
         Ok(())
     }
 
-    pub struct AccountRow {
-        pub id: i64,
-        pub budget_id: i64,
-        pub uuid: Uuid,
-        pub name: String,
-    }
-
-    pub fn get(conn: &Connection, budget_id: i64, account_name: &str) -> Result<AccountRow> {
+    pub fn with_budget_and_name(
+        conn: &Connection,
+        budget_id: i64,
+        account_name: &str,
+    ) -> Result<AccountRow> {
         let mut stmt = conn.prepare(
             "SELECT id, budget_id, uuid, name FROM account WHERE name = ? AND budget_id = ?",
         )?;
@@ -160,6 +181,23 @@ pub mod account {
             })
         })?;
         Ok(result)
+    }
+
+    pub fn get_all(conn: &Connection) -> Result<Vec<AccountRow>> {
+        let mut stmt = conn.prepare("SELECT id, budget_id, uuid, name FROM account;")?;
+        let result = stmt.query_map([], |row| {
+            Ok(AccountRow {
+                id: row.get(0)?,
+                budget_id: row.get(1)?,
+                uuid: row.get::<usize, DbUuid>(2)?.into(),
+                name: row.get(3)?,
+            })
+        })?;
+        let mut rows = Vec::new();
+        for r in result {
+            rows.push(r?);
+        }
+        Ok(rows)
     }
 }
 
