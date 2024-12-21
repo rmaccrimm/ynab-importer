@@ -4,6 +4,7 @@ use super::{
     ofx::load_transactions,
 };
 use crate::db::transaction;
+use crate::ofx::OfxTransaction;
 use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
 use notify_debouncer_full::notify::{event::CreateKind, EventKind::Create};
@@ -15,6 +16,29 @@ use std::path::PathBuf;
 use ynab_api::apis::configuration::Configuration;
 use ynab_api::apis::transactions_api::create_transaction;
 use ynab_api::models::{NewTransaction, PostTransactionsWrapper, TransactionClearedStatus};
+
+fn milli_dollar_amount(amount: f64) -> i64 {
+    (amount * 1000.0).round() as i64
+}
+
+impl From<OfxTransaction> for NewTransaction {
+    fn from(value: OfxTransaction) -> Self {
+        NewTransaction {
+            account_id: None,
+            date: Some(value.date_posted.to_string()),
+            amount: Some(milli_dollar_amount(value.amount)),
+            payee_id: None,
+            payee_name: Some(value.name.clone()),
+            category_id: None,
+            memo: Some(value.memo.clone()),
+            cleared: Some(TransactionClearedStatus::Cleared),
+            approved: None,
+            flag_color: None,
+            subtransactions: None,
+            import_id: None,
+        }
+    }
+}
 
 fn get_budget_and_account_from_path(
     basedir_path: &PathBuf,
@@ -58,10 +82,6 @@ fn get_budget_and_account_from_path(
         return Err(ImportError::PathParsingError(display_path).into());
     }
     Ok((budget_name.unwrap().into(), account_name.unwrap().into()))
-}
-
-fn milli_dollar_amount(amount: f64) -> i64 {
-    (amount * 1000.0).round() as i64
 }
 
 #[derive(Hash, Clone, PartialEq, Eq)]
@@ -140,20 +160,10 @@ impl EventHandler {
                 import_id = key.get_id();
             }
 
-            let new_transaction = NewTransaction {
-                account_id: Some(account.uuid),
-                date: Some(t.date_posted.to_string()),
-                amount: Some(amount_millis),
-                payee_id: None,
-                payee_name: Some(t.name.clone()),
-                category_id: None,
-                memo: Some(t.memo.clone()),
-                cleared: Some(TransactionClearedStatus::Cleared),
-                approved: None,
-                flag_color: None,
-                subtransactions: None,
-                import_id: Some(Some(import_id.clone())),
-            };
+            let mut new_transaction = NewTransaction::from(t);
+            new_transaction.account_id = Some(account.uuid);
+            new_transaction.import_id = Some(Some(import_id.clone()));
+
             transaction_map.insert(import_id, (key, new_transaction.clone()));
             new_transactions.push(new_transaction);
         }
