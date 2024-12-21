@@ -1,9 +1,42 @@
-use rusqlite;
+use rusqlite::types::{FromSql, FromSqlError};
+use rusqlite::{self, ToSql};
 use rusqlite::{params, Connection, OptionalExtension};
+use uuid::Uuid;
 use ynab_api::models::Account;
 use ynab_api::models::BudgetSummary;
 
 use anyhow::Result;
+
+// Wrapper around Uuid that can be saved/loaded from sqlite db automatically
+pub struct DbUuid(pub Uuid);
+
+impl Into<Uuid> for DbUuid {
+    fn into(self) -> Uuid {
+        self.0
+    }
+}
+
+impl From<Uuid> for DbUuid {
+    fn from(value: Uuid) -> Self {
+        Self(value)
+    }
+}
+
+impl FromSql for DbUuid {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        String::column_result(value).and_then(|as_string| {
+            Uuid::parse_str(&as_string)
+                .map(DbUuid::from)
+                .map_err(|err| FromSqlError::Other(Box::new(err)))
+        })
+    }
+}
+
+impl ToSql for DbUuid {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.0.hyphenated().to_string().into())
+    }
+}
 
 pub mod config {
     use std::{ffi::OsString, path::PathBuf};
@@ -54,7 +87,7 @@ pub mod budget {
 
     // Gets the row id for the budget, creating a new row if one does not already exist.
     pub fn get_or_create(conn: &Connection, budget_summary: &BudgetSummary) -> Result<i64> {
-        let uuid = budget_summary.id.hyphenated().to_string();
+        let uuid = DbUuid(budget_summary.id);
         let mut stmt = conn.prepare("SELECT id FROM budget WHERE uuid = ?")?;
         match stmt
             .query_row([&uuid], |row| row.get(0))
@@ -97,7 +130,7 @@ pub mod account {
         accounts: &Vec<Account>,
     ) -> Result<()> {
         for acc in accounts.iter() {
-            let uuid = acc.id.hyphenated().to_string();
+            let uuid = DbUuid(acc.id);
             conn.execute(
                 "INSERT INTO account(budget_id, uuid, name) VALUES (?1, ?2, ?3) \
                 ON CONFLICT(uuid) DO UPDATE SET name=?3;",
@@ -107,12 +140,26 @@ pub mod account {
         Ok(())
     }
 
-    pub fn get_uuid(conn: &Connection, budget_id: i64, account_name: &str) -> Result<Uuid> {
-        let mut stmt = conn.prepare("SELECT uuid FROM account WHERE name = ? AND budget_id = ?")?;
-        let result: String =
-            stmt.query_row(params![&account_name, &budget_id], |row| row.get(0))?;
-        let uuid = Uuid::parse_str(&result)?;
-        Ok(uuid)
+    pub struct AccountRow {
+        id: i64,
+        budget_id: i64,
+        uuid: Uuid,
+        name: String,
+    }
+
+    pub fn get(conn: &Connection, budget_id: i64, account_name: &str) -> Result<AccountRow> {
+        let mut stmt = conn.prepare(
+            "SELECT id, budget_id, uuid, name FROM account WHERE name = ? AND budget_id = ?",
+        )?;
+        let result: AccountRow = stmt.query_row(params![&account_name, &budget_id], |row| {
+            Ok(AccountRow {
+                id: row.get(0)?,
+                budget_id: row.get(1)?,
+                uuid: row.get::<usize, DbUuid>(2)?.into(),
+                name: row.get(3)?,
+            })
+        })?;
+        Ok(result)
     }
 }
 
@@ -129,7 +176,7 @@ pub mod transaction {
     ) -> Result<bool> {
         let mut stmt = conn.prepare(
             "SELECT id FROM transaction_import \
-            WHERE acccount_id = ? AND amount = ? AND date_posted = ?",
+            WHERE account_id = ? AND amount = ? AND date_posted = ?",
         )?;
         let result: Option<i32> = stmt
             .query_row(
