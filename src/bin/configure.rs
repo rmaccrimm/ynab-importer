@@ -2,6 +2,7 @@ use clap::Parser;
 use refinery::embed_migrations;
 use rusqlite;
 use rusqlite::Connection;
+use ynab_importer::sync::sync_transactions;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -116,10 +117,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut token = String::new();
     pat_file.read_to_string(&mut token)?;
 
-    let mut config = Configuration::new();
-    config.bearer_access_token = Some(token.clone());
+    let mut api_config = Configuration::new();
+    api_config.bearer_access_token = Some(token.clone());
 
-    let budget_response = get_budgets(&config, None).await?;
+    let budget_response = get_budgets(&api_config, None).await?;
     let budgets = budget_response.data.budgets;
     if budgets.len() == 0 {
         return Err("Account has no budgets".into());
@@ -131,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let budget_uuid = budget.id.hyphenated().to_string();
-    let accounts = get_accounts(&config, &budget_uuid, None)
+    let accounts = get_accounts(&api_config, &budget_uuid, None)
         .await?
         .data
         .accounts;
@@ -150,6 +151,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &serde_json::to_string(transaction_dir.as_os_str())?,
     )?;
     config::set(&tx, config::ACCESS_TOKEN, &token)?;
+
+    sync_transactions(&tx, &api_config).await?;
 
     tx.commit()?;
     Ok(())

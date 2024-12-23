@@ -5,7 +5,7 @@ use refinery::embed_migrations;
 use rusqlite::Connection;
 use std::{sync::mpsc::channel, time::Duration};
 use tokio;
-use ynab_importer::{db::config, event::EventHandler};
+use ynab_importer::{db::config, event::EventHandler, sync::sync_transactions};
 
 embed_migrations!();
 
@@ -18,6 +18,7 @@ async fn main() -> Result<()> {
     let mut debouncer = new_debouncer(Duration::from_secs(2), None, tx)?;
     let watch_dir = config::get_transaction_dir(&db_conn)?;
     let event_handler = EventHandler::new(db_conn)?;
+    sync_transactions(&event_handler.db_conn, &event_handler.api_config).await?;
 
     debouncer.watch(&watch_dir, RecursiveMode::Recursive)?;
     for res in rx {

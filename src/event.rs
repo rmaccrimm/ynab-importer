@@ -105,8 +105,8 @@ impl TransactionKey {
 }
 
 pub struct EventHandler {
-    db_conn: Connection,
-    api_config: Configuration,
+    pub db_conn: Connection,
+    pub api_config: Configuration,
     max_retries: usize,
 }
 
@@ -150,7 +150,7 @@ impl EventHandler {
             };
             if transaction::exists(&self.db_conn, account.id, amount_millis, key.date)? {
                 println!(
-                    "Transaction with amount ${} on {} already imported. Skipping",
+                    "Transaction with amount ${} on {} already imported.",
                     t.amount, key.date
                 );
                 continue;
