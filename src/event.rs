@@ -84,7 +84,7 @@ fn get_budget_and_account_from_path(
     Ok((budget_name.unwrap().into(), account_name.unwrap().into()))
 }
 
-#[derive(Hash, Clone, PartialEq, Eq)]
+#[derive(Hash, Clone, PartialEq, Eq, Copy, Debug)]
 struct TransactionKey {
     date: NaiveDate,
     amount_millis: i64,
@@ -186,9 +186,25 @@ impl EventHandler {
             match resp.data.transactions {
                 Some(transactions) => {
                     for saved_transaction in transactions.iter() {
-                        let (key, _) = transaction_map
-                            .get(&saved_transaction.import_id.clone().unwrap().unwrap())
-                            .unwrap();
+                        let import_id =
+                            saved_transaction
+                                .import_id
+                                .clone()
+                                .flatten()
+                                .ok_or_else(|| {
+                                    anyhow!(
+                                        "Did not find import_id in saved transaction \
+                                        response. Found {:?}",
+                                        saved_transaction.import_id
+                                    )
+                                })?;
+                        let (key, _) = transaction_map.get(&import_id).ok_or_else(|| {
+                            anyhow!(
+                                "Transaction map does not contain {}:\n{:#?}",
+                                import_id,
+                                transaction_map
+                            )
+                        })?;
 
                         transaction::create_if_not_exists(
                             &self.db_conn,
