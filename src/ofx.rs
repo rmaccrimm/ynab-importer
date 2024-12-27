@@ -7,34 +7,10 @@ use chrono::{self, NaiveDateTime, ParseResult};
 use chrono::{DateTime, NaiveDate};
 use regex::{Captures, Regex};
 use serde::{de, Deserialize, Deserializer};
-use sgmlish;
+use sgmlish::{self, SgmlFragment};
 
 #[derive(Debug, Deserialize)]
 struct Ofx {
-    #[serde(rename = "BANKMSGSRSV1")]
-    response: BankMessagesResponseV1,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct BankMessagesResponseV1 {
-    #[serde(rename = "STMTTRNRS")]
-    response: StatementTransactionResponse,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct StatementTransactionResponse {
-    #[serde(rename = "STMTRS")]
-    response: StatementResponse,
-}
-
-#[derive(Debug, Deserialize)]
-struct StatementResponse {
-    #[serde(rename = "BANKTRANLIST")]
-    transaction_list: TransactionList,
-}
-
-#[derive(Debug, Deserialize)]
-struct TransactionList {
     #[serde(rename = "STMTTRN")]
     transactions: Vec<OfxTransaction>,
 }
@@ -119,14 +95,35 @@ fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
             _ => None,
         })
         .parse(xml)?;
+
     let sgml = sgmlish::transforms::normalize_end_tags(sgml)?;
+
+    let mut events = Vec::new();
+    let mut include = false;
+
+    // Search for the BANKTRANLIST tag
+    for event in sgml.iter() {
+        match event {
+            sgmlish::SgmlEvent::OpenStartTag { name } => {
+                if &name.to_uppercase() == "BANKTRANLIST" {
+                    include = true;
+                }
+            }
+            sgmlish::SgmlEvent::EndTag { name } => {
+                if &name.to_uppercase() == "BANKTRANLIST" {
+                    events.push(event.clone());
+                    break;
+                }
+            }
+            _ => (),
+        }
+        if include {
+            events.push(event.clone());
+        }
+    }
+    let sgml = SgmlFragment::from(events);
     let result = sgmlish::from_fragment::<Ofx>(sgml)?;
-    Ok(result
-        .response
-        .response
-        .response
-        .transaction_list
-        .transactions)
+    Ok(result.transactions)
 }
 
 pub fn load_transactions(path: &PathBuf) -> Result<Vec<OfxTransaction>> {
@@ -141,62 +138,63 @@ mod tests {
     use chrono::NaiveDate;
     use pretty_assertions::assert_eq;
 
-    const SAMPLE: &str = "\
-        OFXHEADER:100\
-        DATA:OFXSGML\
-        VERSION:102\
-        SECURITY:NONE\
-        ENCODING:USASCII\
-        CHARSET:1252\
-        COMPRESSION:NONE\
-        OLDFILEUID:NONE\
-        NEWFILEUID:NONE\
-        \
-        <OFX><SIGNONMSGSRSV1><SONRS><STATUS><CODE>0<SEVERITY>INFO<MESSAGE>Authentication \
-        Successful.</STATUS><DTSERVER>20241120170806.513[-5:EST]<LANGUAGE>ENG<FI><ORG>Tangerine\
-        <FID>12345</FI><INTU.BID>12345</SONRS></SIGNONMSGSRSV1><BANKMSGSRSV1><STMTTRNRS><TRNUID>0\
-        <STATUS><CODE>0<SEVERITY>INFO</STATUS><STMTRS><CURDEF>CAD<BANKACCTFROM><BANKID>1234<ACCTID>\
-        1111111111111111<ACCTTYPE>CREDITLINE</BANKACCTFROM><BANKTRANLIST><DTSTART>\
-        20241102200000.000[-4:EDT]<DTEND>20241120190000.000[-5:EST]
-        <STMTTRN>\
-            <TRNTYPE>DEBIT\
-            <DTPOSTED>20241115120000.000\
-            <TRNAMT>-0.5\
-            <FITID>0000000000001\
-            <NAME>PARKING PAY MACHINE\
-        </STMTTRN>\
-        <STMTTRN>\
-            <TRNTYPE>DEBIT\
-            <DTPOSTED>20241116120000.000\
-            <TRNAMT>-7.88\
-            <FITID>0000000000002\
-            <NAME>SQ ICECREAM\
-            <MEMO>Rewards earned: 0.04 ~ Category: Other\
-        </STMTTRN>\
-        <STMTTRN>\
-            <TRNTYPE>DEBIT\
-            <DTPOSTED>20241116120000.000\
-            <TRNAMT>-7.35\
-            <FITID>0000000000003\
-            <NAME>PIZZA RESTAURANT\
-            <MEMO>Rewards earned: 0.04 ~ Category: Restaurant\
-        </STMTTRN>\
-        <STMTTRN>\
-            <TRNTYPE>DEBIT\
-            <DTPOSTED>20241112120000.000\
-            <TRNAMT>-8.91\
-            <FITID>0000000000004\
-            <NAME>City Mall\
-            <MEMO>Rewards earned: 0.18 ~ Category: Entertainment\
-        </STMTTRN>\
-        </BANKTRANLIST><LEDGERBAL><BALAMT>-276.39<DTASOF>20241120170806.513[-5:EST]</LEDGERBAL>\
-        <AVAILBAL><BALAMT>-11692.05<DTASOF>20241120170806.513[-5:EST]</AVAILBAL></STMTRS>\
-        </STMTTRNRS></BANKMSGSRSV1></OFX>\
-        ";
-
     #[test]
     fn test_parse() {
-        let transactions = parse(&SAMPLE).unwrap();
+        let transactions = parse(
+            "\
+            OFXHEADER:100\
+            DATA:OFXSGML\
+            VERSION:102\
+            SECURITY:NONE\
+            ENCODING:USASCII\
+            CHARSET:1252\
+            COMPRESSION:NONE\
+            OLDFILEUID:NONE\
+            NEWFILEUID:NONE\
+            \
+            <OFX><SIGNONMSGSRSV1><SONRS><STATUS><CODE>0<SEVERITY>INFO<MESSAGE>Authentication \
+            Successful.</STATUS><DTSERVER>20241120170806.513[-5:EST]<LANGUAGE>ENG<FI><ORG>Tangerine\
+            <FID>12345</FI><INTU.BID>12345</SONRS></SIGNONMSGSRSV1><BANKMSGSRSV1><STMTTRNRS>\
+            <TRNUID>0<STATUS><CODE>0<SEVERITY>INFO</STATUS><STMTRS><CURDEF>CAD<BANKACCTFROM>\
+            <BANKID>1234<ACCTID>1111111111111111<ACCTTYPE>CREDITLINE</BANKACCTFROM><BANKTRANLIST>\
+            <DTSTART>20241102200000.000[-4:EDT]<DTEND>20241120190000.000[-5:EST]
+            <STMTTRN>\
+                <TRNTYPE>DEBIT\
+                <DTPOSTED>20241115120000.000\
+                <TRNAMT>-0.5\
+                <FITID>0000000000001\
+                <NAME>PARKING PAY MACHINE\
+            </STMTTRN>\
+            <STMTTRN>\
+                <TRNTYPE>DEBIT\
+                <DTPOSTED>20241116120000.000\
+                <TRNAMT>-7.88\
+                <FITID>0000000000002\
+                <NAME>SQ ICECREAM\
+                <MEMO>Rewards earned: 0.04 ~ Category: Other\
+            </STMTTRN>\
+            <STMTTRN>\
+                <TRNTYPE>DEBIT\
+                <DTPOSTED>20241116120000.000\
+                <TRNAMT>-7.35\
+                <FITID>0000000000003\
+                <NAME>PIZZA RESTAURANT\
+                <MEMO>Rewards earned: 0.04 ~ Category: Restaurant\
+            </STMTTRN>\
+            <STMTTRN>\
+                <TRNTYPE>DEBIT\
+                <DTPOSTED>20241112120000.000\
+                <TRNAMT>-8.91\
+                <FITID>0000000000004\
+                <NAME>City Mall\
+                <MEMO>Rewards earned: 0.18 ~ Category: Entertainment\
+            </STMTTRN>\
+            </BANKTRANLIST><LEDGERBAL><BALAMT>-276.39<DTASOF>20241120170806.513[-5:EST]</LEDGERBAL>\
+            <AVAILBAL><BALAMT>-11692.05<DTASOF>20241120170806.513[-5:EST]</AVAILBAL></STMTRS>\
+            </STMTTRNRS></BANKMSGSRSV1></OFX>\
+            ",
+        )
+        .unwrap();
         assert_eq!(
             transactions,
             vec![
@@ -249,6 +247,63 @@ mod tests {
         assert_eq!(
             parse_date("20241108120000.000").unwrap(),
             NaiveDate::from_ymd_opt(2024, 11, 08).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_parse_credit_card() {
+        let transactions = parse(
+            "OFXHEADER:100\
+            DATA:OFXSGML\
+            VERSION:102\
+            SECURITY:NONE\
+            ENCODING:USASCII\
+            CHARSET:1252\
+            COMPRESSION:NONE\
+            OLDFILEUID:NONE\
+            NEWFILEUID:NONE\
+            <OFX><SIGNONMSGSRSV1><SONRS><STATUS><CODE>0<SEVERITY>INFO<MESSAGE>OK</STATUS>\
+            <DTSERVER>20241226044534<LANGUAGE>ENG<DTPROFUP>20241226044534<DTACCTUP>20241226044534\
+            <INTU.BID>00000</SONRS></SIGNONMSGSRSV1><CREDITCARDMSGSRSV1><CCSTMTTRNRS><TRNUID>\
+            20241226044534<STATUS><CODE>0<SEVERITY>INFO<MESSAGE>OK</STATUS><CCSTMTRS><CURDEF>CAD\
+            <CCACCTFROM><ACCTID>0000000000000000<ACCTTYPE>CREDITLINE</CCACCTFROM> \
+            <BANKTRANLIST><DTSTART>20241218120000<DTEND>20241223120000 \
+            <STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20241223120000.000[-5:EST]<TRNAMT>-6.10<FITID>\
+            00000000000001<NAME>GAS STATION 123<MEMO>TOWN NAME;CC#0000********0000</STMTTRN>\
+            <STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20241223120000.000[-5:EST]<TRNAMT>-44.46<FITID>\
+            00000000000002<NAME>GAS STATION 123<MEMO>TOWN NAME;CC#0000********0000</STMTTRN>\
+            <STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20241218120000.000[-5:EST]<TRNAMT>152.98<FITID>\
+            00000000000003<NAME>PAYMENT THANK YOU/PAIEMEN<MEMO>CC#0000********0000</STMTTRN>\
+            </BANKTRANLIST><LEDGERBAL><BALAMT>-50.56<DTASOF>20241226044534</LEDGERBAL><AVAILBAL>\
+            <BALAMT>9949.44<DTASOF>20241226044534</AVAILBAL></CCSTMTRS></CCSTMTTRNRS>\
+            </CREDITCARDMSGSRSV1></OFX>",
+        )
+        .unwrap();
+        assert_eq!(
+            transactions,
+            vec![
+                OfxTransaction {
+                    transaction_kind: TransactionKind::DEBIT,
+                    date_posted: NaiveDate::from_ymd_opt(2024, 12, 23).unwrap(),
+                    amount: -6.10,
+                    name: Some("GAS STATION 123".into()),
+                    memo: Some("TOWN NAME;CC#0000********0000".into()),
+                },
+                OfxTransaction {
+                    transaction_kind: TransactionKind::DEBIT,
+                    date_posted: NaiveDate::from_ymd_opt(2024, 12, 23).unwrap(),
+                    amount: -44.46,
+                    name: Some("GAS STATION 123".into()),
+                    memo: Some("TOWN NAME;CC#0000********0000".into()),
+                },
+                OfxTransaction {
+                    transaction_kind: TransactionKind::CREDIT,
+                    date_posted: NaiveDate::from_ymd_opt(2024, 12, 18).unwrap(),
+                    amount: 152.98,
+                    name: Some("PAYMENT THANK YOU/PAIEMEN".into()),
+                    memo: Some("CC#0000********0000".into()),
+                }
+            ]
         );
     }
 }
