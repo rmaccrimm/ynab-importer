@@ -1,9 +1,42 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 
-use eframe::egui;
+use eframe::egui::{self, FontId, RichText, Ui};
+use std::{
+    sync::mpsc::{channel, Receiver, Sender},
+    time::Duration,
+};
+use tokio::runtime::Runtime;
+use ynab_api::{self, models::BudgetSummary};
+use ynab_api::{
+    apis::{
+        accounts_api::get_accounts,
+        budgets_api::{get_budgets, GetBudgetsError},
+        configuration::Configuration,
+    },
+    models::{Account, BudgetSummaryResponse},
+};
+use ynab_importer::db::budget;
 
-fn main() -> eframe::Result {
+type GetBudgetsResponse = Result<BudgetSummaryResponse, ynab_api::apis::Error<GetBudgetsError>>;
+
+#[tokio::main]
+async fn main() -> eframe::Result {
+    let rt = Runtime::new().expect("Unable to create Runtime");
+
+    // Enter the runtime so that `tokio::spawn` is available immediately.
+    let _enter = rt.enter();
+
+    // Execute the runtime in its own thread.
+    // The future doesn't have to do anything. In this example, it just sleeps forever.
+    std::thread::spawn(move || {
+        rt.block_on(async {
+            loop {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+            }
+        })
+    });
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([640.0, 240.0]) // wide enough for the drag-drop overlay text
@@ -13,26 +46,95 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Native file dialogs and drag-and-drop files",
         options,
-        Box::new(|_cc| Ok(Box::<MyApp>::default())),
+        Box::new(|_cc| Ok(Box::new(MyApp::new()))),
     )
 }
 
-#[derive(Default)]
+enum LoadingState<T> {
+    Loading,
+    Success(T),
+    Failed(String),
+}
+
+struct BudgetSelect {
+    state: LoadingState<Vec<BudgetSummary>>,
+    selected: Vec<bool>,
+}
+
+impl BudgetSelect {
+    fn new() -> Self {
+        BudgetSelect {
+            state: LoadingState::Loading,
+            selected: Vec::new(),
+        }
+    }
+
+    fn set_budgets(&mut self, budgets: Vec<BudgetSummary>) {
+        self.selected = vec![false; budgets.len()];
+        self.state = LoadingState::Success(budgets);
+    }
+
+    fn set_error(&mut self, msg: String) {
+        self.state = LoadingState::Failed(msg);
+    }
+
+    fn draw_ui(&mut self, ui: &mut Ui) {
+        match &self.state {
+            LoadingState::Loading => {
+                ui.label("Loading budgets...");
+            }
+            LoadingState::Success(budgets) => {
+                for (i, b) in budgets.iter().enumerate() {
+                    ui.checkbox(&mut self.selected[i], b.name.clone());
+                }
+            }
+            LoadingState::Failed(msg) => {
+                ui.label(msg);
+            }
+        }
+    }
+}
+
 struct MyApp {
     dropped_files: Vec<egui::DroppedFile>,
     picked_path: Option<String>,
+    api_config: Option<Configuration>,
+    tx: Sender<GetBudgetsResponse>,
+    rx: Receiver<GetBudgetsResponse>,
+    budget_select: Option<BudgetSelect>,
+    access_token: Option<String>,
+    transaction_dir: String,
+}
+
+impl MyApp {
+    fn new() -> Self {
+        let (tx, rx) = channel();
+        MyApp {
+            dropped_files: vec![],
+            picked_path: None,
+            api_config: None,
+            tx,
+            rx,
+            budget_select: None,
+            access_token: None,
+            transaction_dir: String::new(),
+        }
+    }
 }
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.label("Drag-and-drop files onto the window!");
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new("Personal Access Token").font(FontId::proportional(20.0)));
+                ui.label("Drag-and-drop file here or");
 
-            if ui.button("Open file…").clicked() {
-                if let Some(path) = rfd::FileDialog::new().pick_file() {
-                    self.picked_path = Some(path.display().to_string());
+                if ui.button("Browse").clicked() {
+                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        self.picked_path = Some(path.display().to_string());
+                    }
                 }
-            }
+            });
 
             if let Some(picked_path) = &self.picked_path {
                 ui.horizontal(|ui| {
@@ -69,6 +171,43 @@ impl eframe::App for MyApp {
                         ui.label(info);
                     }
                 });
+            }
+            let submit = ui.button("Submit");
+            if submit.clicked() {
+                // Create the budget select in initial loading state
+                self.budget_select = Some(BudgetSelect::new());
+                make_budget_request(ctx.clone(), self.tx.clone(), self.api_config.clone());
+            }
+
+            if let Some(bsel) = &mut self.budget_select {
+                ui.label("User id: placeholder");
+                ui.label("Select budget(s):");
+                bsel.draw_ui(ui);
+                ui.horizontal(|ui| {
+                    ui.label("Monitored folder location");
+                    ui.text_edit_singleline(&mut self.transaction_dir);
+                    if ui.button("Browse").clicked() {
+                        todo!();
+                    }
+                });
+                if ui.button("Create Directories").clicked() {
+                    todo!();
+                }
+            }
+
+            if let Ok(result) = self.rx.try_recv() {
+                match result {
+                    Ok(resp) => {
+                        self.budget_select
+                            .as_mut()
+                            .map(|bsel| bsel.set_budgets(resp.data.budgets));
+                    }
+                    Err(err) => {
+                        self.budget_select
+                            .as_mut()
+                            .map(|bsel| bsel.set_error(err.to_string()));
+                    }
+                }
             }
         });
 
@@ -116,4 +255,18 @@ fn preview_files_being_dropped(ctx: &egui::Context) {
             Color32::WHITE,
         );
     }
+}
+
+fn make_budget_request(
+    ctx: egui::Context,
+    tx: Sender<GetBudgetsResponse>,
+    api_config: Configuration,
+) {
+    tokio::spawn(async move {
+        println!("Making request");
+        let budget_resp = get_budgets(&api_config, Some(true)).await;
+        println!("{:#?}", budget_resp);
+        tx.send(budget_resp).expect("Channel is closed");
+        ctx.request_repaint();
+    });
 }

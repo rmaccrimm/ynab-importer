@@ -2,7 +2,6 @@ use clap::Parser;
 use refinery::embed_migrations;
 use rusqlite;
 use rusqlite::Connection;
-use ynab_importer::sync::sync_transactions;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -15,6 +14,7 @@ use ynab_api::apis::{accounts_api::get_accounts, budgets_api::get_budgets};
 use ynab_api::models::Account;
 use ynab_api::models::BudgetSummary;
 use ynab_importer::db::{account, budget, config};
+use ynab_importer::sync::sync_transactions;
 
 use serde_json;
 
