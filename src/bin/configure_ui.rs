@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 
-use eframe::egui::{self, FontId, RichText, Ui};
+use eframe::egui::{self, FontId, RichText, Spinner, Ui};
+use notify_debouncer_full::notify::Config;
+use std::fs;
+use std::io::Read;
 use std::{
     sync::mpsc::{channel, Receiver, Sender},
     time::Duration,
@@ -17,8 +20,6 @@ use ynab_api::{
     models::{Account, BudgetSummaryResponse},
 };
 use ynab_importer::db::budget;
-
-type GetBudgetsResponse = Result<BudgetSummaryResponse, ynab_api::apis::Error<GetBudgetsError>>;
 
 #[tokio::main]
 async fn main() -> eframe::Result {
@@ -102,7 +103,6 @@ struct MyApp {
     tx: Sender<GetBudgetsResponse>,
     rx: Receiver<GetBudgetsResponse>,
     budget_select: Option<BudgetSelect>,
-    access_token: Option<String>,
     transaction_dir: String,
 }
 
@@ -116,9 +116,20 @@ impl MyApp {
             tx,
             rx,
             budget_select: None,
-            access_token: None,
             transaction_dir: String::new(),
         }
+    }
+
+    fn load_access_token(&mut self, path: String) -> Result<(), String> {
+        let mut pat_file = fs::File::open(&path).map_err(|err| err.to_string())?;
+        let mut token = String::new();
+        pat_file
+            .read_to_string(&mut token)
+            .map_err(|err| err.to_string())?;
+        let mut api_config = Configuration::new();
+        api_config.bearer_access_token = Some(token);
+        self.api_config = Some(api_config);
+        Ok(())
     }
 }
 
@@ -142,6 +153,7 @@ impl eframe::App for MyApp {
                     ui.monospace(picked_path);
                 });
             }
+            ui.add(Spinner::new().size(50.0));
 
             // Show dropped files (if any):
             if !self.dropped_files.is_empty() {
@@ -176,7 +188,7 @@ impl eframe::App for MyApp {
             if submit.clicked() {
                 // Create the budget select in initial loading state
                 self.budget_select = Some(BudgetSelect::new());
-                make_budget_request(ctx.clone(), self.tx.clone(), self.api_config.clone());
+                // make_budget_request(ctx.clone(), self.tx.clone(), self.api_config.clone());
             }
 
             if let Some(bsel) = &mut self.budget_select {
@@ -255,18 +267,4 @@ fn preview_files_being_dropped(ctx: &egui::Context) {
             Color32::WHITE,
         );
     }
-}
-
-fn make_budget_request(
-    ctx: egui::Context,
-    tx: Sender<GetBudgetsResponse>,
-    api_config: Configuration,
-) {
-    tokio::spawn(async move {
-        println!("Making request");
-        let budget_resp = get_budgets(&api_config, Some(true)).await;
-        println!("{:#?}", budget_resp);
-        tx.send(budget_resp).expect("Channel is closed");
-        ctx.request_repaint();
-    });
 }
