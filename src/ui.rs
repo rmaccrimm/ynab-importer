@@ -15,7 +15,7 @@ use ynab_api::{
 
 type View = Box<dyn eframe::App + Send>;
 
-pub struct DragAndDropView {
+struct DragAndDropView {
     tx: Sender<View>,
     picked_path: Option<PathBuf>,
     error: Option<String>,
@@ -132,7 +132,7 @@ impl eframe::App for DragAndDropView {
     }
 }
 
-pub struct LoadingView();
+struct LoadingView();
 
 impl eframe::App for LoadingView {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
@@ -147,12 +147,13 @@ impl eframe::App for LoadingView {
     }
 }
 
-pub struct BudgetSelectView {
+struct BudgetSelectView {
     api_config: Configuration,
     tx: Sender<View>,
     budgets: Vec<BudgetSummary>,
     selected: Vec<bool>,
     error: Option<String>,
+    transaction_dir: String,
 }
 
 impl BudgetSelectView {
@@ -168,15 +169,27 @@ impl BudgetSelectView {
             selected: vec![false; budgets.len()],
             budgets,
             error: None,
+            transaction_dir: String::new(),
         })
     }
 }
 
 impl eframe::App for BudgetSelectView {
-    fn update(&mut self, ctx: &eframe::egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            for budget in &self.budgets {
-                ui.label(budget.name.clone());
+            ui.label("Select the budget(s) to configure folders for:");
+            for (i, b) in self.budgets.iter().enumerate() {
+                ui.checkbox(&mut self.selected[i], b.name.clone());
+            }
+            ui.label("Monitored folder location:");
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.transaction_dir);
+                if ui.button("Browse").clicked() {
+                    todo!();
+                }
+            });
+            if ui.button("Create Directories").clicked() {
+                todo!();
             }
         });
     }
