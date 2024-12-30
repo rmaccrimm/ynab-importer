@@ -1,5 +1,4 @@
 use eframe::egui::{self, Context, FontId, Spinner, Theme};
-use eframe::epaint::tessellator::Path;
 use eframe::{self, egui::RichText};
 use egui::{Align2, Color32, Id, LayerId, Order, TextStyle};
 use std::env::current_dir;

@@ -27,10 +27,10 @@ thiserror = "2.0.3"
 path = "api-lib"
 
 [[bin]]
-name = "configure"
+name = "setup_cli"
 
 [[bin]]
-name = "configure_ui"
+name = "setup_ui"
 
 [[bin]]
 name = "service"
