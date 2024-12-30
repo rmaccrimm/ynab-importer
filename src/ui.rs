@@ -13,21 +13,7 @@ use ynab_api::{
     models::BudgetSummary,
 };
 
-enum View {
-    DragAndDrop(DragAndDropView),
-    Loading(LoadingView),
-    BudgetSelect(BudgetSelectView),
-}
-
-impl eframe::App for View {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        match self {
-            View::DragAndDrop(drag_and_drop_view) => drag_and_drop_view.update(ctx, frame),
-            View::Loading(loading_view) => loading_view.update(ctx, frame),
-            View::BudgetSelect(budget_select_view) => budget_select_view.update(ctx, frame),
-        }
-    }
-}
+type View = Box<dyn eframe::App + Send>;
 
 pub struct DragAndDropView {
     tx: Sender<View>,
@@ -101,14 +87,14 @@ impl DragAndDropView {
             api_config.bearer_access_token = Some(token);
 
             self.tx
-                .send(View::Loading(LoadingView()))
+                .send(Box::new(LoadingView()))
                 .expect("Channel was closed");
 
             let tx = self.tx.clone();
             tokio::spawn(async move {
                 let next = match BudgetSelectView::init(api_config, tx.clone()).await {
-                    Ok(budget_select) => View::BudgetSelect(budget_select),
-                    Err(msg) => View::DragAndDrop(DragAndDropView {
+                    Ok(budget_select) => Box::new(budget_select) as View,
+                    Err(msg) => Box::new(DragAndDropView {
                         tx: tx.clone(),
                         picked_path: None,
                         error: Some(msg),
@@ -205,7 +191,7 @@ impl ConfigApp {
     pub fn new() -> Self {
         let (tx, rx) = channel();
         Self {
-            current_view: View::DragAndDrop(DragAndDropView::new(tx.clone())),
+            current_view: Box::new(DragAndDropView::new(tx.clone())),
             rx,
         }
     }
