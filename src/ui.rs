@@ -15,13 +15,42 @@ use ynab_api::{
 
 type View = Box<dyn eframe::App + Send>;
 
-struct DragAndDropView {
+/*
+Main application state machine. All the actual rendering and state transition logic is implented by
+the states (Views) themselves.
+ */
+pub struct ConfigApp {
+    current_view: View,
+    rx: Receiver<View>,
+}
+
+impl ConfigApp {
+    pub fn new() -> Self {
+        let (tx, rx) = channel();
+        Self {
+            current_view: Box::new(DragAndDropFileView::new(tx.clone())),
+            rx,
+        }
+    }
+}
+
+impl eframe::App for ConfigApp {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.current_view.update(ctx, frame);
+        if let Ok(next_state) = self.rx.try_recv() {
+            self.current_view = next_state;
+        }
+    }
+}
+
+// Initial state, asks the user to provide a file containing the personal access token
+struct DragAndDropFileView {
     tx: Sender<View>,
     picked_path: Option<PathBuf>,
     error: Option<String>,
 }
 
-impl DragAndDropView {
+impl DragAndDropFileView {
     fn new(tx: Sender<View>) -> Self {
         Self {
             tx,
@@ -92,9 +121,11 @@ impl DragAndDropView {
 
             let tx = self.tx.clone();
             tokio::spawn(async move {
-                let next = match BudgetSelectView::init(api_config, tx.clone()).await {
+                let next = match MonitoredFolderFormView::init(api_config).await {
+                    // Go to form view
                     Ok(budget_select) => Box::new(budget_select) as View,
-                    Err(msg) => Box::new(DragAndDropView {
+                    // Go back to initial state and show error message
+                    Err(msg) => Box::new(DragAndDropFileView {
                         tx: tx.clone(),
                         picked_path: None,
                         error: Some(msg),
@@ -108,7 +139,7 @@ impl DragAndDropView {
     }
 }
 
-impl eframe::App for DragAndDropView {
+impl eframe::App for DragAndDropFileView {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
@@ -132,6 +163,7 @@ impl eframe::App for DragAndDropView {
     }
 }
 
+// A simple loading screen
 struct LoadingView();
 
 impl eframe::App for LoadingView {
@@ -147,25 +179,22 @@ impl eframe::App for LoadingView {
     }
 }
 
-struct BudgetSelectView {
-    api_config: Configuration,
-    tx: Sender<View>,
+// Final state. Form for selecting the folder to monitor and which budgets to create subfolders for.
+struct MonitoredFolderFormView {
     budgets: Vec<BudgetSummary>,
     selected: Vec<bool>,
-    error: Option<String>,
     transaction_dir: String,
+    error: Option<String>,
 }
 
-impl BudgetSelectView {
-    async fn init(api_config: Configuration, tx: Sender<View>) -> Result<Self, String> {
+impl MonitoredFolderFormView {
+    async fn init(api_config: Configuration) -> Result<Self, String> {
         let budgets = get_budgets(&api_config, Some(true))
             .await
             .map_err(|err| err.to_string())
             .map(|resp| resp.data.budgets)?;
 
-        Ok(BudgetSelectView {
-            api_config,
-            tx,
+        Ok(MonitoredFolderFormView {
             selected: vec![false; budgets.len()],
             budgets,
             error: None,
@@ -174,13 +203,9 @@ impl BudgetSelectView {
     }
 }
 
-impl eframe::App for BudgetSelectView {
+impl eframe::App for MonitoredFolderFormView {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.label("Select the budget(s) to configure folders for:");
-            for (i, b) in self.budgets.iter().enumerate() {
-                ui.checkbox(&mut self.selected[i], b.name.clone());
-            }
             ui.label("Monitored folder location:");
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut self.transaction_dir);
@@ -188,33 +213,16 @@ impl eframe::App for BudgetSelectView {
                     todo!();
                 }
             });
+            ui.label("Select the budget(s) to create subfolders for:");
+            for (i, b) in self.budgets.iter().enumerate() {
+                ui.checkbox(&mut self.selected[i], b.name.clone());
+            }
             if ui.button("Create Directories").clicked() {
                 todo!();
             }
+            if let Some(msg) = &self.error {
+                ui.label(msg);
+            }
         });
-    }
-}
-
-pub struct ConfigApp {
-    current_view: View,
-    rx: Receiver<View>,
-}
-
-impl ConfigApp {
-    pub fn new() -> Self {
-        let (tx, rx) = channel();
-        Self {
-            current_view: Box::new(DragAndDropView::new(tx.clone())),
-            rx,
-        }
-    }
-}
-
-impl eframe::App for ConfigApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        self.current_view.update(ctx, frame);
-        if let Ok(next_state) = self.rx.try_recv() {
-            self.current_view = next_state;
-        }
     }
 }
