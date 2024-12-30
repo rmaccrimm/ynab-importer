@@ -1,8 +1,8 @@
-use eframe::egui::scroll_area::State;
-use eframe::egui::{self, Context, FontId, Spinner};
+use eframe::egui::{self, Context, FontId, Spinner, Theme};
+use eframe::epaint::tessellator::Path;
 use eframe::{self, egui::RichText};
 use egui::{Align2, Color32, Id, LayerId, Order, TextStyle};
-use refinery::config;
+use std::env::current_dir;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
@@ -25,7 +25,9 @@ pub struct ConfigApp {
 }
 
 impl ConfigApp {
-    pub fn new() -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        cc.egui_ctx.set_theme(Theme::Dark);
+        cc.egui_ctx.set_zoom_factor(1.5);
         let (tx, rx) = channel();
         Self {
             current_view: Box::new(DragAndDropFileView::new(tx.clone())),
@@ -143,6 +145,7 @@ impl eframe::App for DragAndDropFileView {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
+                ui.label("");
                 ui.label(RichText::new("Personal Access Token").font(FontId::proportional(20.0)));
                 ui.label("Drag-and-drop file here or");
 
@@ -156,10 +159,15 @@ impl eframe::App for DragAndDropFileView {
             if let Err(msg) = self.next_state(ctx.clone()) {
                 self.error = Some(msg);
             }
-            if let Some(msg) = &self.error {
-                ui.label(msg);
-            }
         });
+
+        egui::TopBottomPanel::bottom("error_pannel")
+            .show_separator_line(false)
+            .show(ctx, |ui| {
+                if let Some(msg) = &self.error {
+                    ui.label(RichText::new(msg).color(Color32::LIGHT_RED));
+                }
+            });
     }
 }
 
@@ -198,7 +206,9 @@ impl MonitoredFolderFormView {
             selected: vec![false; budgets.len()],
             budgets,
             error: None,
-            transaction_dir: String::new(),
+            transaction_dir: current_dir()
+                .map(|b| b.display().to_string())
+                .unwrap_or(String::new()),
         })
     }
 }
@@ -207,22 +217,34 @@ impl eframe::App for MonitoredFolderFormView {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.label("Monitored folder location:");
+            ui.end_row();
+
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut self.transaction_dir);
                 if ui.button("Browse").clicked() {
                     todo!();
                 }
             });
+            ui.add_space(10.0);
+
             ui.label("Select the budget(s) to create subfolders for:");
             for (i, b) in self.budgets.iter().enumerate() {
                 ui.checkbox(&mut self.selected[i], b.name.clone());
+                ui.end_row();
             }
+            ui.add_space(10.0);
+
             if ui.button("Create Directories").clicked() {
                 todo!();
             }
-            if let Some(msg) = &self.error {
-                ui.label(msg);
-            }
         });
+
+        egui::TopBottomPanel::bottom("error_pannel")
+            .show_separator_line(false)
+            .show(ctx, |ui| {
+                if let Some(msg) = &self.error {
+                    ui.label(RichText::new(msg).color(Color32::LIGHT_RED));
+                }
+            });
     }
 }
