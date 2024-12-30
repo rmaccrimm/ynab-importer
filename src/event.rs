@@ -124,6 +124,18 @@ impl EventHandler {
         })
     }
 
+    pub async fn handle(&self, event: &DebouncedEvent) -> Result<()> {
+        match event.kind {
+            Create(CreateKind::File) | Create(CreateKind::Any) => {
+                self.create_transactions_with_retry(event).await
+            }
+            _ => {
+                println!("Ignored event {:?}", event);
+                Ok(())
+            }
+        }
+    }
+
     async fn create_transactions_with_retry(&self, event: &DebouncedEvent) -> Result<()> {
         if event.paths.len() == 0 {
             return Err(ImportError::NoPathError.into());
@@ -246,17 +258,5 @@ impl EventHandler {
             }
         }
         Ok(())
-    }
-
-    pub async fn handle(&self, event: &DebouncedEvent) -> Result<()> {
-        match event.kind {
-            Create(CreateKind::File) | Create(CreateKind::Any) => {
-                self.create_transactions_with_retry(event).await
-            }
-            _ => {
-                println!("Ignored event {:?}", event);
-                Ok(())
-            }
-        }
     }
 }
