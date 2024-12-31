@@ -85,6 +85,7 @@ pub mod budget {
 
     use super::*;
 
+    #[derive(Clone)]
     pub struct BudgetRow {
         pub id: i64,
         pub uuid: Uuid,
@@ -141,6 +142,7 @@ pub mod account {
 
     use super::*;
 
+    #[derive(Clone)]
     pub struct AccountRow {
         pub id: i64,
         pub budget_id: i64,
@@ -202,9 +204,31 @@ pub mod account {
 }
 
 pub mod transaction {
+    use std::str::FromStr;
+
     use chrono::NaiveDate;
 
     use super::*;
+
+    pub struct TransactionRow {
+        // TODO make id optional for other row types?
+        pub id: Option<i64>,
+        pub amount_milli: i64,
+        pub date_posted: NaiveDate,
+        pub account_id: i64,
+    }
+
+    impl TransactionRow {
+        pub fn new(amount_milli: i64, date_str: String, account_id: i64) -> Self {
+            Self {
+                id: None,
+                amount_milli,
+                account_id,
+                date_posted: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+                    .expect(&format!("Received an invalid date string: {}", date_str)),
+            }
+        }
+    }
 
     pub fn exists(
         conn: &Connection,
@@ -225,16 +249,15 @@ pub mod transaction {
         Ok(result.is_some())
     }
 
-    pub fn create_if_not_exists(
-        conn: &Connection,
-        account_id: i64,
-        amount_milli: i64,
-        date_posted: NaiveDate,
-    ) -> Result<()> {
+    pub fn create_if_not_exists(conn: &Connection, row: TransactionRow) -> Result<()> {
         conn.execute(
             "INSERT INTO transaction_import(account_id, amount, date_posted) VALUES (?, ?, ?) \
             ON CONFLICT(amount, date_posted, account_id) DO NOTHING;",
-            params![account_id, amount_milli, date_posted.to_string()],
+            params![
+                row.account_id,
+                row.amount_milli,
+                row.date_posted.to_string()
+            ],
         )?;
         Ok(())
     }

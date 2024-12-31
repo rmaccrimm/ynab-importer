@@ -3,7 +3,7 @@ use super::{
     db::{account, budget, config},
     ofx::load_transactions,
 };
-use crate::db::transaction;
+use crate::db::transaction::{self, TransactionRow};
 use crate::ofx::OfxTransaction;
 use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
@@ -220,9 +220,12 @@ impl EventHandler {
 
                         transaction::create_if_not_exists(
                             &self.db_conn,
-                            account.id,
-                            key.amount_millis,
-                            key.date,
+                            TransactionRow {
+                                id: None,
+                                account_id: account.id,
+                                amount_milli: key.amount_millis,
+                                date_posted: key.date,
+                            },
                         )?;
                     }
                 }

@@ -8,13 +8,15 @@ use std::io;
 use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::sync::RwLock;
 use tokio;
 use ynab_api::apis::configuration::Configuration;
 use ynab_api::apis::{accounts_api::get_accounts, budgets_api::get_budgets};
 use ynab_api::models::Account;
 use ynab_api::models::BudgetSummary;
 use ynab_importer::db::{account, budget, config};
-use ynab_importer::sync::sync_transactions;
+use ynab_importer::setup::run_setup;
 
 use serde_json;
 
@@ -68,39 +70,6 @@ pub fn prompt_budget(budgets: &Vec<BudgetSummary>) -> &BudgetSummary {
     &budgets[sel - 1]
 }
 
-pub fn create_dir_if_not_exists(path: &PathBuf) -> io::Result<()> {
-    match fs::create_dir(&path) {
-        Ok(()) => {
-            println!("Created {}", path.display());
-            return Ok(());
-        }
-        Err(err) => match err.kind() {
-            io::ErrorKind::AlreadyExists => {
-                println!("{} already exists", path.display());
-                return Ok(());
-            }
-            _ => Err(err),
-        },
-    }
-}
-
-pub fn create_directories(
-    transaction_dir: &PathBuf,
-    budget: &BudgetSummary,
-    accounts: &Vec<Account>,
-) -> io::Result<()> {
-    let mut path = transaction_dir.clone();
-    path.push(&budget.name);
-    create_dir_if_not_exists(&path)?;
-
-    for acc in accounts.iter() {
-        path.push(&acc.name);
-        create_dir_if_not_exists(&path)?;
-        path.pop();
-    }
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
@@ -120,40 +89,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut api_config = Configuration::new();
     api_config.bearer_access_token = Some(token.clone());
 
-    let budget_response = get_budgets(&api_config, None).await?;
+    let budget_response = get_budgets(&api_config, Some(true)).await?;
     let budgets = budget_response.data.budgets;
     if budgets.len() == 0 {
         return Err("Account has no budgets".into());
     }
 
-    let mut budget = &budgets[0];
+    let mut budget = budgets[0].clone();
     if budgets.len() > 1 {
-        budget = prompt_budget(&budgets);
+        budget = prompt_budget(&budgets).clone();
     }
 
-    let budget_uuid = budget.id.hyphenated().to_string();
-    let accounts = get_accounts(&api_config, &budget_uuid, None)
-        .await?
-        .data
-        .accounts;
+    let (sx, rx) = mpsc::channel();
+    let conn_lock = RwLock::new(conn);
+    tokio::spawn(async move {
+        run_setup(conn_lock, &api_config, &transaction_dir, vec![budget], sx).await
+    })
+    .await?;
 
-    create_directories(&transaction_dir, budget, &accounts)?;
+    // sync_transactions(conn, &api_config, sx.clone()).await?;
+    // loop {
+    //     match rx.recv() {
+    //         Ok(msg) => {
+    //             println!("{}", msg);
+    //         }
+    //         Err(_) => {
+    //             break;
+    //         }
+    //     }
+    // }
 
-    let tx = conn.transaction()?;
-
-    let budget_id = budget::get_or_create(&tx, budget)?;
-    account::create_if_not_exists(&tx, budget_id, &accounts)?;
-    config::set_transaction_dir(&tx, &transaction_dir)?;
-    config::set(&tx, config::USER_ID, &args.user_id)?;
-    config::set(
-        &tx,
-        config::TRANSACTION_DIR,
-        &serde_json::to_string(transaction_dir.as_os_str())?,
-    )?;
-    config::set(&tx, config::ACCESS_TOKEN, &token)?;
-
-    sync_transactions(&tx, &api_config).await?;
-
-    tx.commit()?;
     Ok(())
 }

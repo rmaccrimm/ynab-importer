@@ -5,7 +5,7 @@ use refinery::embed_migrations;
 use rusqlite::Connection;
 use std::{sync::mpsc::channel, time::Duration};
 use tokio;
-use ynab_importer::{db::config, event::EventHandler, sync::sync_transactions};
+use ynab_importer::{db::config, event::EventHandler, setup::sync_transactions};
 
 embed_migrations!();
 
