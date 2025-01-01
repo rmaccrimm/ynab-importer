@@ -93,9 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::task::spawn_blocking(move || {
         run_setup(conn, &api_config, &transaction_dir, vec![budget], sx)
     });
-    while let Ok(msg) = rx.recv() {
+    for msg in rx {
         println!("{}", msg);
     }
-
     Ok(())
 }

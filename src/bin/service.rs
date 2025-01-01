@@ -25,8 +25,8 @@ async fn main() -> Result<()> {
     for res in rx {
         match res {
             Ok(events) => {
-                for event in events.iter() {
-                    if let Err(err) = event_handler.handle(event).await {
+                for event in events {
+                    if let Err(err) = event_handler.handle(&event).await {
                         println!("{:?}", err);
                     };
                 }
