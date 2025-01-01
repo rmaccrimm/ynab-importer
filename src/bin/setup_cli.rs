@@ -9,7 +9,7 @@ use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex};
 use tokio;
 use ynab_api::apis::configuration::Configuration;
 use ynab_api::apis::{accounts_api::get_accounts, budgets_api::get_budgets};
@@ -24,10 +24,6 @@ embed_migrations!();
 
 #[derive(Parser, Debug)]
 struct Args {
-    // Your YNAB user id (email address)
-    #[arg(short, long)]
-    user_id: String,
-
     // Path to your personal access token
     #[arg(short, long)]
     access_token: PathBuf,
@@ -101,23 +97,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let (sx, rx) = mpsc::channel();
-    let conn_lock = RwLock::new(conn);
-    tokio::spawn(async move {
-        run_setup(conn_lock, &api_config, &transaction_dir, vec![budget], sx).await
-    })
-    .await?;
-
-    // sync_transactions(conn, &api_config, sx.clone()).await?;
-    // loop {
-    //     match rx.recv() {
-    //         Ok(msg) => {
-    //             println!("{}", msg);
-    //         }
-    //         Err(_) => {
-    //             break;
-    //         }
-    //     }
-    // }
+    tokio::task::spawn_blocking(move || {
+        run_setup(conn, &api_config, &transaction_dir, vec![budget], sx)
+    });
+    while let Ok(msg) = rx.recv() {
+        println!("{}", msg);
+    }
 
     Ok(())
 }

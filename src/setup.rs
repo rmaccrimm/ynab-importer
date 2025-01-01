@@ -8,9 +8,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
-use std::sync::RwLock;
-use tokio::sync::Mutex;
+use std::sync::mpsc;
+use std::sync::{mpsc::Sender, Arc, Mutex};
 use tokio::task::JoinSet;
 use ynab_api::apis::{configuration::Configuration, transactions_api::get_transactions_by_account};
 use ynab_api::models::{Account, BudgetSummary};
@@ -52,7 +51,7 @@ async fn make_transactions_request(
     api_config: Configuration,
     budget_uuids: HashMap<i64, String>,
     accounts: Vec<AccountRow>,
-    sx: Sender<String>,
+    tx: Sender<String>,
 ) -> Result<Vec<TransactionRow>> {
     let mut set: JoinSet<Result<Vec<TransactionRow>>> = JoinSet::new();
     for acc in accounts {
@@ -62,7 +61,7 @@ async fn make_transactions_request(
             .clone();
         let api_config = api_config.clone();
         let acc = acc.clone();
-        let sx = sx.clone();
+        let tx = tx.clone();
 
         set.spawn(async move {
             let response = get_transactions_by_account(
@@ -85,7 +84,7 @@ async fn make_transactions_request(
                 transactions.len(),
                 acc.name
             ));
-            sx.send(msg).expect("Channel was closed");
+            tx.send(msg).expect("Channel was closed");
             Ok(transactions)
         });
     }
@@ -99,33 +98,46 @@ async fn make_transactions_request(
     Ok(transactions)
 }
 
-pub async fn load_existing_transactions(
-    conn_lock: RwLock<Connection>,
+pub fn sync_transactions(
+    mut conn: Connection,
     api_config: &Configuration,
-    sx: Sender<String>,
+    tx_msg: Sender<String>,
 ) -> Result<()> {
-    let mut conn = conn_lock.write().unwrap();
     let accounts = account::get_all(&conn)?;
+
     let mut budget_uuids = HashMap::new();
     for acc in accounts.iter() {
         let budget = budget::get(&conn, acc.budget_id)?;
         budget_uuids.insert(acc.id, budget.uuid.hyphenated().to_string());
     }
 
-    let transactions =
-        make_transactions_request(api_config.clone(), budget_uuids, accounts, sx).await?;
+    let (tx_trans, rx) = mpsc::channel();
+    let api_config = api_config.clone();
+    tokio::spawn(async move {
+        let result = make_transactions_request(api_config, budget_uuids, accounts, tx_msg).await;
+        tx_trans.send(result).expect("Channel was closed");
+    });
 
     let tx = conn.transaction()?;
-    for t in transactions {
-        transaction::create_if_not_exists(&tx, t)?;
+    loop {
+        match rx.recv() {
+            Ok(res) => {
+                for t in res? {
+                    transaction::create_if_not_exists(&tx, t)?;
+                }
+            }
+            Err(_) => {
+                break;
+            }
+        }
     }
     tx.commit()?;
     Ok(())
 }
 
-pub async fn run_setup(
-    // SQLite connection behind a mutex so it can be used in a spawned thread
-    conn_lock: RwLock<Connection>,
+pub fn run_setup(
+    // SQLite connection
+    mut conn: Connection,
 
     // API configuration object (with bearer access token)
     api_config: &Configuration,
@@ -137,10 +149,8 @@ pub async fn run_setup(
     budgets: Vec<BudgetSummary>,
 
     // Channel to send status messages over
-    sx: Sender<String>,
+    tx_msg: Sender<String>,
 ) -> Result<()> {
-    let mut conn = conn_lock.write().unwrap();
-
     if !fs::exists(&transaction_dir)? {
         return Err(anyhow!("Directory does not exist"));
     }
@@ -148,7 +158,8 @@ pub async fn run_setup(
     for budget in budgets {
         let accounts = budget.accounts.clone().unwrap_or(Vec::new());
         create_directories(&transaction_dir, &budget, &accounts)?;
-        sx.send(format!("Created directories for {}", &budget.name.clone()).into())
+        tx_msg
+            .send(format!("Created directories for {}", &budget.name.clone()).into())
             .expect("Channel was closed");
 
         let budget_id = budget::get_or_create(&tx, &budget)?;
@@ -166,9 +177,9 @@ pub async fn run_setup(
         )?;
     }
     tx.commit()?;
-    // Unlock the mutex
-    drop(conn);
-
-    sync_transactions(conn_lock, &api_config, sx.clone()).await?;
+    sync_transactions(conn, &api_config, tx_msg.clone())?;
+    tx_msg
+        .send("Setup Complete".into())
+        .expect("Channel was closed");
     Ok(())
 }
