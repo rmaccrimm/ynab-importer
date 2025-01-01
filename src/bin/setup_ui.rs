@@ -2,16 +2,16 @@
 
 use eframe::egui;
 use refinery::embed_migrations;
-use rusqlite::Connection;
-use ynab_importer::ui::ConfigApp;
+use ynab_importer::{db::get_sqlite_conn, ui::ConfigApp};
 
 embed_migrations!();
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut conn = Connection::open("./db.sqlite3")?;
-    migrations::runner().run(&mut conn)?;
-    drop(conn);
+    {
+        let mut conn = get_sqlite_conn()?;
+        migrations::runner().run(&mut conn)?;
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

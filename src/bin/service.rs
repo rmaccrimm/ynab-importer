@@ -2,16 +2,18 @@ use anyhow::Result;
 use notify_debouncer_full::new_debouncer;
 use notify_debouncer_full::notify::RecursiveMode;
 use refinery::embed_migrations;
-use rusqlite::Connection;
 use std::{sync::mpsc::channel, time::Duration};
 use tokio;
-use ynab_importer::{db::config, event::EventHandler, setup::sync_transactions};
+use ynab_importer::{
+    db::{config, get_sqlite_conn},
+    event::EventHandler,
+};
 
 embed_migrations!();
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut db_conn = Connection::open("./db.sqlite3")?;
+    let mut db_conn = get_sqlite_conn()?;
     migrations::runner().run(&mut db_conn)?;
 
     let (tx, rx) = channel();

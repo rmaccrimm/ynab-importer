@@ -1,7 +1,5 @@
 use clap::Parser;
 use refinery::embed_migrations;
-use rusqlite;
-use rusqlite::Connection;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -9,16 +7,12 @@ use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use tokio;
+use ynab_api::apis::budgets_api::get_budgets;
 use ynab_api::apis::configuration::Configuration;
-use ynab_api::apis::{accounts_api::get_accounts, budgets_api::get_budgets};
-use ynab_api::models::Account;
 use ynab_api::models::BudgetSummary;
-use ynab_importer::db::{account, budget, config};
+use ynab_importer::db::get_sqlite_conn;
 use ynab_importer::setup::run_setup;
-
-use serde_json;
 
 embed_migrations!();
 
@@ -75,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Directory does not exist".into());
     }
 
-    let mut conn = Connection::open("./db.sqlite3")?;
+    let mut conn = get_sqlite_conn()?;
     migrations::runner().run(&mut conn)?;
 
     let mut pat_file = fs::File::open(&args.access_token)?;

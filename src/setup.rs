@@ -9,7 +9,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::{mpsc::Sender, Arc, Mutex};
+use std::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 use ynab_api::apis::{configuration::Configuration, transactions_api::get_transactions_by_account};
 use ynab_api::models::{Account, BudgetSummary};

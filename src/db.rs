@@ -1,11 +1,19 @@
+use anyhow::Result;
 use rusqlite::types::{FromSql, FromSqlError};
 use rusqlite::{self, ToSql};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::env::current_exe;
 use uuid::Uuid;
 use ynab_api::models::Account;
 use ynab_api::models::BudgetSummary;
 
-use anyhow::Result;
+pub fn get_sqlite_conn() -> Result<Connection> {
+    let mut pb = current_exe()?;
+    pb.pop();
+    pb.push("db.sqlite");
+    let conn = Connection::open(pb.as_path())?;
+    Ok(conn)
+}
 
 // Wrapper around Uuid that can be saved/loaded from sqlite db automatically
 struct DbUuid(pub Uuid);
@@ -204,8 +212,6 @@ pub mod account {
 }
 
 pub mod transaction {
-    use std::str::FromStr;
-
     use chrono::NaiveDate;
 
     use super::*;

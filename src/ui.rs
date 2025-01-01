@@ -1,7 +1,7 @@
+use anyhow::Result;
 use eframe::egui::{self, Context, FontId, Spinner, Theme};
 use eframe::{self, egui::RichText};
 use egui::{Align2, Color32, Id, LayerId, Order, TextStyle};
-use rusqlite::Connection;
 use std::env::current_dir;
 use std::fmt::Write as _;
 use std::fs;
@@ -13,6 +13,7 @@ use ynab_api::{
     models::BudgetSummary,
 };
 
+use crate::db::get_sqlite_conn;
 use crate::setup::run_setup;
 
 type View = Box<dyn eframe::App + Send>;
@@ -108,13 +109,11 @@ impl DragAndDropFileView {
 
     // Transitions to the loading state and also initiates the tokio task to hit the YNAB api, which
     // will initiate transition to the budget select state on completion.
-    fn next_state(&self, ctx: Context) -> Result<(), String> {
+    fn next_state(&self, ctx: Context) -> Result<()> {
         if let Some(path) = &self.picked_path {
-            let mut pat_file = fs::File::open(&path).map_err(|err| err.to_string())?;
+            let mut pat_file = fs::File::open(&path)?;
             let mut token = String::new();
-            pat_file
-                .read_to_string(&mut token)
-                .map_err(|err| err.to_string())?;
+            pat_file.read_to_string(&mut token)?;
 
             let mut api_config = Configuration::new();
             api_config.bearer_access_token = Some(token);
@@ -129,10 +128,10 @@ impl DragAndDropFileView {
                     // Go to form view
                     Ok(form_view) => Box::new(form_view) as View,
                     // Go back to initial state and show error message
-                    Err(msg) => Box::new(DragAndDropFileView {
+                    Err(err) => Box::new(DragAndDropFileView {
                         tx: tx.clone(),
                         picked_path: None,
-                        error: Some(msg),
+                        error: Some(err.to_string()),
                     }),
                 };
                 tx.send(next).expect("Channel was closed");
@@ -158,8 +157,8 @@ impl eframe::App for DragAndDropFileView {
 
             self.preview_files_being_dropped(ctx);
             self.check_dropped_files(ctx);
-            if let Err(msg) = self.next_state(ctx.clone()) {
-                self.error = Some(msg);
+            if let Err(err) = self.next_state(ctx.clone()) {
+                self.error = Some(err.to_string());
             }
         });
 
@@ -204,10 +203,9 @@ struct MonitoredFolderFormView {
 }
 
 impl MonitoredFolderFormView {
-    async fn init(api_config: Configuration) -> Result<Self, String> {
+    async fn init(api_config: Configuration) -> Result<Self> {
         let budgets = get_budgets(&api_config, Some(true))
             .await
-            .map_err(|err| err.to_string())
             .map(|resp| resp.data.budgets)?;
 
         let (tx_err, rx_err) = mpsc::channel();
@@ -228,14 +226,14 @@ impl MonitoredFolderFormView {
         })
     }
 
-    fn start_setup(&mut self) {
+    fn start_setup(&mut self) -> Result<()> {
         self.setup_running = true;
         self.error = None;
 
         let (tx, rx) = mpsc::channel();
         self.rx_msg = Some(rx);
 
-        let conn = Connection::open("./db.sqlite3").expect("Failed to open db");
+        let conn = get_sqlite_conn()?;
         let config = self.api_config.clone();
         let path = PathBuf::from(&self.transaction_dir);
         let budgets = self.budgets.clone();
@@ -247,11 +245,12 @@ impl MonitoredFolderFormView {
                 tx_err.send(err.to_string()).expect("Channel was closed");
             }
         });
+        Ok(())
     }
 
     fn poll_messages(&mut self) {
         if let Ok(err) = self.rx_err.try_recv() {
-            self.error = Some(err);
+            self.error = Some(err.to_string());
         }
         // rx_msg is None until setup is started
         if let Some(rx) = &self.rx_msg {
@@ -297,7 +296,9 @@ impl eframe::App for MonitoredFolderFormView {
                     ui.spinner();
                 } else {
                     if ui.button("Start Setup").clicked() {
-                        self.start_setup();
+                        if let Err(err) = self.start_setup() {
+                            self.error = Some(err.to_string())
+                        }
                     }
                 }
                 if let Some(msg) = &self.log_msg {
