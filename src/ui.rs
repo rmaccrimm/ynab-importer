@@ -1,5 +1,4 @@
 use eframe::egui::{self, Context, FontId, Spinner, Theme};
-use eframe::epaint::tessellator::Path;
 use eframe::{self, egui::RichText};
 use egui::{Align2, Color32, Id, LayerId, Order, TextStyle};
 use rusqlite::Connection;
@@ -128,7 +127,7 @@ impl DragAndDropFileView {
             tokio::spawn(async move {
                 let next = match MonitoredFolderFormView::init(api_config).await {
                     // Go to form view
-                    Ok(budget_select) => Box::new(budget_select) as View,
+                    Ok(form_view) => Box::new(form_view) as View,
                     // Go back to initial state and show error message
                     Err(msg) => Box::new(DragAndDropFileView {
                         tx: tx.clone(),
@@ -231,6 +230,8 @@ impl MonitoredFolderFormView {
 
     fn start_setup(&mut self) {
         self.setup_running = true;
+        self.error = None;
+
         let (tx, rx) = mpsc::channel();
         self.rx_msg = Some(rx);
 
@@ -252,12 +253,14 @@ impl MonitoredFolderFormView {
         if let Ok(err) = self.rx_err.try_recv() {
             self.error = Some(err);
         }
+        // rx_msg is None until setup is started
         if let Some(rx) = &self.rx_msg {
             match rx.try_recv() {
                 Ok(msg) => {
                     self.log_msg = Some(msg);
                 }
                 Err(err) => {
+                    // Sender was dropped meaning setup task has completed
                     if err == mpsc::TryRecvError::Disconnected {
                         self.rx_msg = None;
                         self.setup_running = false;
