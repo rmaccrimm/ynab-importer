@@ -111,7 +111,7 @@ impl DragAndDropFileView {
     // will initiate transition to the budget select state on completion.
     fn next_state(&self, ctx: Context) -> Result<()> {
         if let Some(path) = &self.picked_path {
-            let mut pat_file = fs::File::open(&path)?;
+            let mut pat_file = fs::File::open(path)?;
             let mut token = String::new();
             pat_file.read_to_string(&mut token)?;
 
@@ -216,7 +216,7 @@ impl MonitoredFolderFormView {
             budgets,
             transaction_dir: current_dir()
                 .map(|b| b.display().to_string())
-                .unwrap_or(String::new()),
+                .unwrap_or_default(),
             setup_running: false,
             error: None,
             log_msg: None,
@@ -294,11 +294,9 @@ impl eframe::App for MonitoredFolderFormView {
             ui.horizontal(|ui| {
                 if self.setup_running {
                     ui.spinner();
-                } else {
-                    if ui.button("Start Setup").clicked() {
-                        if let Err(err) = self.start_setup() {
-                            self.error = Some(err.to_string())
-                        }
+                } else if ui.button("Start Setup").clicked() {
+                    if let Err(err) = self.start_setup() {
+                        self.error = Some(err.to_string())
                     }
                 }
                 if let Some(msg) = &self.log_msg {

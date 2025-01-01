@@ -7,23 +7,23 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 use ynab_api::apis::{configuration::Configuration, transactions_api::get_transactions_by_account};
 use ynab_api::models::{Account, BudgetSummary};
 
-fn create_dir_if_not_exists(path: &PathBuf) -> io::Result<()> {
-    match fs::create_dir(&path) {
+fn create_dir_if_not_exists(path: &Path) -> io::Result<()> {
+    match fs::create_dir(path) {
         Ok(()) => {
             println!("Created {}", path.display());
-            return Ok(());
+            Ok(())
         }
         Err(err) => match err.kind() {
             io::ErrorKind::AlreadyExists => {
                 println!("{} already exists", path.display());
-                return Ok(());
+                Ok(())
             }
             _ => Err(err),
         },
@@ -31,11 +31,11 @@ fn create_dir_if_not_exists(path: &PathBuf) -> io::Result<()> {
 }
 
 pub fn create_directories(
-    transaction_dir: &PathBuf,
+    transaction_dir: &Path,
     budget: &BudgetSummary,
-    accounts: &Vec<Account>,
+    accounts: &[Account],
 ) -> io::Result<()> {
-    let mut path = transaction_dir.clone();
+    let mut path = transaction_dir.to_path_buf();
     path.push(&budget.name);
     create_dir_if_not_exists(&path)?;
 
@@ -78,12 +78,13 @@ async fn make_transactions_request(
                 .transactions
                 .into_iter()
                 .map(|t| TransactionRow::new(t.amount, t.date, acc.id))
-                .collect();
-            let msg = String::from(format!(
+                .collect::<Result<Vec<TransactionRow>>>()
+                .unwrap_or_else(|err| panic!("Failed to create transaction row: {}", err));
+            let msg = format!(
                 "Storing {} transactions for account {}",
                 transactions.len(),
                 acc.name
-            ));
+            );
             tx.send(msg).expect("Channel was closed");
             Ok(transactions)
         });
@@ -119,16 +120,9 @@ pub fn sync_transactions(
     });
 
     let tx = conn.transaction()?;
-    loop {
-        match rx.recv() {
-            Ok(res) => {
-                for t in res? {
-                    transaction::create_if_not_exists(&tx, t)?;
-                }
-            }
-            Err(_) => {
-                break;
-            }
+    while let Ok(res) = rx.recv() {
+        for t in res? {
+            transaction::create_if_not_exists(&tx, t)?;
         }
     }
     tx.commit()?;
@@ -151,20 +145,20 @@ pub fn run_setup(
     // Channel to send status messages over
     tx_msg: Sender<String>,
 ) -> Result<()> {
-    if !fs::exists(&transaction_dir)? {
+    if !fs::exists(transaction_dir)? {
         return Err(anyhow!("Directory does not exist"));
     }
     let tx = conn.transaction()?;
     for budget in budgets {
         let accounts = budget.accounts.clone().unwrap_or(Vec::new());
-        create_directories(&transaction_dir, &budget, &accounts)?;
+        create_directories(transaction_dir, &budget, &accounts)?;
         tx_msg
-            .send(format!("Created directories for {}", &budget.name.clone()).into())
+            .send(format!("Created directories for {}", &budget.name.clone()))
             .expect("Channel was closed");
 
         let budget_id = budget::get_or_create(&tx, &budget)?;
         account::create_if_not_exists(&tx, budget_id, &accounts)?;
-        config::set_transaction_dir(&tx, &transaction_dir)?;
+        config::set_transaction_dir(&tx, transaction_dir)?;
         config::set(
             &tx,
             config::TRANSACTION_DIR,
@@ -177,7 +171,7 @@ pub fn run_setup(
         )?;
     }
     tx.commit()?;
-    sync_transactions(conn, &api_config, tx_msg.clone())?;
+    sync_transactions(conn, api_config, tx_msg.clone())?;
     tx_msg
         .send("Setup Complete".into())
         .expect("Channel was closed");

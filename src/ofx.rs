@@ -128,7 +128,7 @@ fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
 
 pub fn load_transactions(path: &PathBuf) -> Result<Vec<OfxTransaction>> {
     let content = fs::read_to_string(path)?;
-    let ts = parse(&content).map_err(|err| ImportError::from(err))?;
+    let ts = parse(&content).map_err(ImportError::from)?;
     Ok(ts)
 }
 
@@ -242,11 +242,11 @@ mod tests {
         );
         assert_eq!(
             parse_date("20240731200000.000[-4:EDT]").unwrap(),
-            NaiveDate::from_ymd_opt(2024, 07, 31).unwrap()
+            NaiveDate::from_ymd_opt(2024, 7, 31).unwrap()
         );
         assert_eq!(
             parse_date("20241108120000.000").unwrap(),
-            NaiveDate::from_ymd_opt(2024, 11, 08).unwrap()
+            NaiveDate::from_ymd_opt(2024, 11, 8).unwrap()
         );
     }
 

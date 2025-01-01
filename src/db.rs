@@ -18,9 +18,9 @@ pub fn get_sqlite_conn() -> Result<Connection> {
 // Wrapper around Uuid that can be saved/loaded from sqlite db automatically
 struct DbUuid(pub Uuid);
 
-impl Into<Uuid> for DbUuid {
-    fn into(self) -> Uuid {
-        self.0
+impl From<DbUuid> for Uuid {
+    fn from(value: DbUuid) -> Self {
+        value.0
     }
 }
 
@@ -47,7 +47,10 @@ impl ToSql for DbUuid {
 }
 
 pub mod config {
-    use std::{ffi::OsString, path::PathBuf};
+    use std::{
+        ffi::OsString,
+        path::{Path, PathBuf},
+    };
 
     use super::*;
 
@@ -73,7 +76,7 @@ pub mod config {
         Ok(s)
     }
 
-    pub fn set_transaction_dir(conn: &Connection, path: &PathBuf) -> Result<usize> {
+    pub fn set_transaction_dir(conn: &Connection, path: &Path) -> Result<usize> {
         set(
             conn,
             TRANSACTION_DIR,
@@ -161,7 +164,7 @@ pub mod account {
     pub fn create_if_not_exists(
         conn: &Connection,
         budget_id: i64,
-        accounts: &Vec<Account>,
+        accounts: &[Account],
     ) -> Result<()> {
         for acc in accounts.iter() {
             let uuid = DbUuid(acc.id);
@@ -225,14 +228,13 @@ pub mod transaction {
     }
 
     impl TransactionRow {
-        pub fn new(amount_milli: i64, date_str: String, account_id: i64) -> Self {
-            Self {
+        pub fn new(amount_milli: i64, date_str: String, account_id: i64) -> Result<Self> {
+            Ok(Self {
                 id: None,
                 amount_milli,
                 account_id,
-                date_posted: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
-                    .expect(&format!("Received an invalid date string: {}", date_str)),
-            }
+                date_posted: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?,
+            })
         }
     }
 

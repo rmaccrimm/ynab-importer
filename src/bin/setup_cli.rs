@@ -7,7 +7,6 @@ use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use tokio;
 use ynab_api::apis::budgets_api::get_budgets;
 use ynab_api::apis::configuration::Configuration;
 use ynab_api::models::BudgetSummary;
@@ -27,7 +26,7 @@ struct Args {
     transaction_dir: OsString,
 }
 
-pub fn read_prompt_int(options: &Vec<usize>) -> usize {
+pub fn read_prompt_int(options: &[usize]) -> usize {
     loop {
         io::stdout().flush().expect("stdout flush failed");
         let mut input = String::new();
@@ -50,13 +49,13 @@ pub fn read_prompt_int(options: &Vec<usize>) -> usize {
     }
 }
 
-pub fn prompt_budget(budgets: &Vec<BudgetSummary>) -> &BudgetSummary {
+pub fn prompt_budget(budgets: &[BudgetSummary]) -> &BudgetSummary {
     println!("The following budgets were found for this account:");
     for (i, b) in budgets.iter().enumerate() {
         println!("[{}]: {}", i + 1, b.name);
     }
     print!("Enter the account you like to use [1-{}]: ", budgets.len());
-    let sel = read_prompt_int(&(1..=budgets.len()).collect());
+    let sel = read_prompt_int(&Vec::from_iter(1..=budgets.len()));
     &budgets[sel - 1]
 }
 
@@ -81,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let budget_response = get_budgets(&api_config, Some(true)).await?;
     let budgets = budget_response.data.budgets;
-    if budgets.len() == 0 {
+    if budgets.is_empty() {
         return Err("Account has no budgets".into());
     }
 

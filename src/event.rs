@@ -12,7 +12,7 @@ use notify_debouncer_full::DebouncedEvent;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use ynab_api::apis::configuration::Configuration;
 use ynab_api::apis::transactions_api::create_transaction;
 use ynab_api::models::{NewTransaction, PostTransactionsWrapper, TransactionClearedStatus};
@@ -42,7 +42,7 @@ impl From<OfxTransaction> for NewTransaction {
 
 fn get_budget_and_account_from_path(
     basedir_path: &PathBuf,
-    path: &PathBuf,
+    path: &Path,
 ) -> Result<(String, String)> {
     let mut display_path = String::new();
     write!(&mut display_path, "{}", path.display())?;
@@ -137,7 +137,7 @@ impl EventHandler {
     }
 
     async fn create_transactions_with_retry(&self, event: &DebouncedEvent) -> Result<()> {
-        if event.paths.len() == 0 {
+        if event.paths.is_empty() {
             return Err(ImportError::NoPathError.into());
         }
         let path = &event.paths[0];
@@ -195,41 +195,38 @@ impl EventHandler {
             println!("{:?}", resp);
             new_transactions.clear();
 
-            match resp.data.transactions {
-                Some(transactions) => {
-                    for saved_transaction in transactions.iter() {
-                        let import_id =
-                            saved_transaction
-                                .import_id
-                                .clone()
-                                .flatten()
-                                .ok_or_else(|| {
-                                    anyhow!(
-                                        "Did not find import_id in saved transaction \
+            if let Some(transactions) = resp.data.transactions {
+                for saved_transaction in transactions.iter() {
+                    let import_id =
+                        saved_transaction
+                            .import_id
+                            .clone()
+                            .flatten()
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "Did not find import_id in saved transaction \
                                         response. Found {:?}",
-                                        saved_transaction.import_id
-                                    )
-                                })?;
-                        let (key, _) = transaction_map.get(&import_id).ok_or_else(|| {
-                            anyhow!(
-                                "Transaction map does not contain {}:\n{:#?}",
-                                import_id,
-                                transaction_map
-                            )
-                        })?;
+                                    saved_transaction.import_id
+                                )
+                            })?;
+                    let (key, _) = transaction_map.get(&import_id).ok_or_else(|| {
+                        anyhow!(
+                            "Transaction map does not contain {}:\n{:#?}",
+                            import_id,
+                            transaction_map
+                        )
+                    })?;
 
-                        transaction::create_if_not_exists(
-                            &self.db_conn,
-                            TransactionRow {
-                                id: None,
-                                account_id: account.id,
-                                amount_milli: key.amount_millis,
-                                date_posted: key.date,
-                            },
-                        )?;
-                    }
+                    transaction::create_if_not_exists(
+                        &self.db_conn,
+                        TransactionRow {
+                            id: None,
+                            account_id: account.id,
+                            amount_milli: key.amount_millis,
+                            date_posted: key.date,
+                        },
+                    )?;
                 }
-                None => (),
             }
 
             match resp.data.duplicate_import_ids {
@@ -245,7 +242,7 @@ impl EventHandler {
                     }
                     for import_id in ids {
                         let (key, transaction) = transaction_map.get(&import_id).unwrap();
-                        let mut new_key = key.clone();
+                        let mut new_key = *key;
                         new_key.occurrence += 1;
                         let import_id = new_key.get_id();
 

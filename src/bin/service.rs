@@ -3,7 +3,6 @@ use notify_debouncer_full::new_debouncer;
 use notify_debouncer_full::notify::RecursiveMode;
 use refinery::embed_migrations;
 use std::{sync::mpsc::channel, time::Duration};
-use tokio;
 use ynab_importer::{
     db::{config, get_sqlite_conn},
     event::EventHandler,
@@ -27,11 +26,8 @@ async fn main() -> Result<()> {
         match res {
             Ok(events) => {
                 for event in events.iter() {
-                    match event_handler.handle(event).await {
-                        Err(err) => {
-                            println!("{:?}", err);
-                        }
-                        _ => (),
+                    if let Err(err) = event_handler.handle(event).await {
+                        println!("{:?}", err);
                     };
                 }
             }
