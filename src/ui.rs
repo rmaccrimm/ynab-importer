@@ -1,16 +1,20 @@
 use eframe::egui::{self, Context, FontId, Spinner, Theme};
+use eframe::epaint::tessellator::Path;
 use eframe::{self, egui::RichText};
 use egui::{Align2, Color32, Id, LayerId, Order, TextStyle};
+use rusqlite::Connection;
 use std::env::current_dir;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{self, channel, Receiver, Sender};
 use ynab_api::{
     apis::{budgets_api::get_budgets, configuration::Configuration},
     models::BudgetSummary,
 };
+
+use crate::setup::run_setup;
 
 type View = Box<dyn eframe::App + Send>;
 
@@ -188,10 +192,16 @@ impl eframe::App for LoadingView {
 
 // Final state. Form for selecting the folder to monitor and which budgets to create subfolders for.
 struct MonitoredFolderFormView {
+    api_config: Configuration,
     budgets: Vec<BudgetSummary>,
     selected: Vec<bool>,
     transaction_dir: String,
+    setup_running: bool,
     error: Option<String>,
+    log_msg: Option<String>,
+    rx_msg: Option<Receiver<String>>,
+    tx_err: Sender<String>,
+    rx_err: Receiver<String>,
 }
 
 impl MonitoredFolderFormView {
@@ -201,14 +211,60 @@ impl MonitoredFolderFormView {
             .map_err(|err| err.to_string())
             .map(|resp| resp.data.budgets)?;
 
+        let (tx_err, rx_err) = mpsc::channel();
+
         Ok(MonitoredFolderFormView {
+            api_config,
             selected: vec![false; budgets.len()],
             budgets,
-            error: None,
             transaction_dir: current_dir()
                 .map(|b| b.display().to_string())
                 .unwrap_or(String::new()),
+            setup_running: false,
+            error: None,
+            log_msg: None,
+            rx_msg: None,
+            tx_err,
+            rx_err,
         })
+    }
+
+    fn start_setup(&mut self) {
+        self.setup_running = true;
+        let (tx, rx) = mpsc::channel();
+        self.rx_msg = Some(rx);
+
+        let conn = Connection::open("./db.sqlite3").expect("Failed to open db");
+        let config = self.api_config.clone();
+        let path = PathBuf::from(&self.transaction_dir);
+        let budgets = self.budgets.clone();
+
+        let tx_err = self.tx_err.clone();
+        tokio::task::spawn_blocking(move || {
+            let result = run_setup(conn, &config, &path, budgets, tx);
+            if let Err(err) = result {
+                tx_err.send(err.to_string()).expect("Channel was closed");
+            }
+        });
+    }
+
+    fn poll_messages(&mut self) {
+        if let Ok(err) = self.rx_err.try_recv() {
+            self.error = Some(err);
+        }
+        if let Some(rx) = &self.rx_msg {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    self.log_msg = Some(msg);
+                }
+                Err(err) => {
+                    if err == mpsc::TryRecvError::Disconnected {
+                        self.rx_msg = None;
+                        self.setup_running = false;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -233,9 +289,18 @@ impl eframe::App for MonitoredFolderFormView {
             }
             ui.add_space(10.0);
 
-            if ui.button("Create Directories").clicked() {
-                todo!();
-            }
+            ui.horizontal(|ui| {
+                if self.setup_running {
+                    ui.spinner();
+                } else {
+                    if ui.button("Start Setup").clicked() {
+                        self.start_setup();
+                    }
+                }
+                if let Some(msg) = &self.log_msg {
+                    ui.label(msg);
+                }
+            });
         });
 
         egui::TopBottomPanel::bottom("error_pannel")
@@ -245,5 +310,7 @@ impl eframe::App for MonitoredFolderFormView {
                     ui.label(RichText::new(msg).color(Color32::LIGHT_RED));
                 }
             });
+
+        self.poll_messages();
     }
 }
