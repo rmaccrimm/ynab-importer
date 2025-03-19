@@ -92,11 +92,12 @@ struct TransactionKey {
 }
 
 impl TransactionKey {
+    // Recreates the YNAB import id as to avoid duplicates if also using the built-in importer
     fn get_id(&self) -> String {
         let mut s = String::new();
         write!(
             s,
-            "ynab_importer:{}:{}:{}",
+            "YNAB:{}:{}:{}",
             self.date, self.amount_millis, self.occurrence
         )
         .unwrap();
@@ -126,8 +127,19 @@ impl EventHandler {
 
     pub async fn handle(&self, event: &DebouncedEvent) -> Result<()> {
         match event.kind {
-            Create(CreateKind::File) | Create(CreateKind::Any) => {
-                self.create_transactions_with_retry(event).await
+            Create(CreateKind::File) => {
+		if event.paths.is_empty() {
+		    return Err(ImportError::NoPathError.into());
+		}
+		let path = &event.paths[0];
+		if let Some(ext) = path.extension() {
+		    let ext = ext.to_ascii_lowercase();
+		    if (ext != "qfx") && (ext != "ofx") {
+			println!("Ignoring non qfx file {:?}", path.display());
+			return Ok(());
+		    }
+		}
+                self.create_transactions_with_retry(path).await
             }
             _ => {
                 println!("Ignored event {:?}", event);
@@ -136,11 +148,7 @@ impl EventHandler {
         }
     }
 
-    async fn create_transactions_with_retry(&self, event: &DebouncedEvent) -> Result<()> {
-        if event.paths.is_empty() {
-            return Err(ImportError::NoPathError.into());
-        }
-        let path = &event.paths[0];
+    async fn create_transactions_with_retry(&self, path: &PathBuf) -> Result<()> {
         let base_dir = config::get_transaction_dir(&self.db_conn)?;
         let (budget_name, account_name) = get_budget_and_account_from_path(&base_dir, path)?;
 
