@@ -6,7 +6,7 @@ use anyhow::Result;
 use chrono::{self, NaiveDateTime, ParseResult};
 use chrono::{DateTime, NaiveDate};
 use regex::{Captures, Regex};
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de};
 use sgmlish::{self, SgmlFragment};
 
 #[derive(Debug, Deserialize)]
@@ -85,7 +85,7 @@ fn get_ofx_block(file_contents: &str) -> Option<&str> {
 
 fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
     let xml = get_ofx_block(file_contents).unwrap();
-    let sgml = sgmlish::Parser::builder()
+    let builder = sgmlish::Parser::builder()
         .uppercase_names()
         .expand_entities(|entity| match entity {
             "lt" => Some("<"),
@@ -93,10 +93,17 @@ fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
             "amp" => Some("&"),
             "nbsp" => Some(" "),
             _ => None,
-        })
-        .parse(xml)?;
+        });
 
-    let sgml = sgmlish::transforms::normalize_end_tags(sgml)?;
+    let sgml = {
+        if let Ok(s) = builder.parse(xml) {
+            s
+        } else {
+            // Fallback on parser that does not do entity expansion, since not all banks export
+            // with the &amp encoding
+            sgmlish::Parser::builder().uppercase_names().parse(xml)?
+        }
+    };
 
     let mut events = Vec::new();
     let mut include = false;
@@ -195,39 +202,36 @@ mod tests {
             ",
         )
         .unwrap();
-        assert_eq!(
-            transactions,
-            vec![
-                OfxTransaction {
-                    transaction_kind: TransactionKind::DEBIT,
-                    date_posted: NaiveDate::from_ymd_opt(2024, 11, 15).unwrap(),
-                    amount: -0.5,
-                    name: Some("PARKING PAY MACHINE".into()),
-                    memo: None,
-                },
-                OfxTransaction {
-                    transaction_kind: TransactionKind::DEBIT,
-                    date_posted: NaiveDate::from_ymd_opt(2024, 11, 16).unwrap(),
-                    amount: -7.88,
-                    name: Some("SQ ICECREAM".into()),
-                    memo: Some("Rewards earned: 0.04 ~ Category: Other".into()),
-                },
-                OfxTransaction {
-                    transaction_kind: TransactionKind::DEBIT,
-                    date_posted: NaiveDate::from_ymd_opt(2024, 11, 16).unwrap(),
-                    amount: -7.35,
-                    name: Some("PIZZA RESTAURANT".into()),
-                    memo: Some("Rewards earned: 0.04 ~ Category: Restaurant".into()),
-                },
-                OfxTransaction {
-                    transaction_kind: TransactionKind::DEBIT,
-                    date_posted: NaiveDate::from_ymd_opt(2024, 11, 12).unwrap(),
-                    amount: -8.91,
-                    name: Some("City Mall".into()),
-                    memo: Some("Rewards earned: 0.18 ~ Category: Entertainment".into()),
-                }
-            ]
-        );
+        assert_eq!(transactions, vec![
+            OfxTransaction {
+                transaction_kind: TransactionKind::DEBIT,
+                date_posted: NaiveDate::from_ymd_opt(2024, 11, 15).unwrap(),
+                amount: -0.5,
+                name: Some("PARKING PAY MACHINE".into()),
+                memo: None,
+            },
+            OfxTransaction {
+                transaction_kind: TransactionKind::DEBIT,
+                date_posted: NaiveDate::from_ymd_opt(2024, 11, 16).unwrap(),
+                amount: -7.88,
+                name: Some("SQ ICECREAM".into()),
+                memo: Some("Rewards earned: 0.04 ~ Category: Other".into()),
+            },
+            OfxTransaction {
+                transaction_kind: TransactionKind::DEBIT,
+                date_posted: NaiveDate::from_ymd_opt(2024, 11, 16).unwrap(),
+                amount: -7.35,
+                name: Some("PIZZA RESTAURANT".into()),
+                memo: Some("Rewards earned: 0.04 ~ Category: Restaurant".into()),
+            },
+            OfxTransaction {
+                transaction_kind: TransactionKind::DEBIT,
+                date_posted: NaiveDate::from_ymd_opt(2024, 11, 12).unwrap(),
+                amount: -8.91,
+                name: Some("City Mall".into()),
+                memo: Some("Rewards earned: 0.18 ~ Category: Entertainment".into()),
+            }
+        ]);
     }
 
     #[test]
@@ -269,7 +273,7 @@ mod tests {
             <CCACCTFROM><ACCTID>0000000000000000<ACCTTYPE>CREDITLINE</CCACCTFROM> \
             <BANKTRANLIST><DTSTART>20241218120000<DTEND>20241223120000 \
             <STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20241223120000.000[-5:EST]<TRNAMT>-6.10<FITID>\
-            00000000000001<NAME>GAS STATION 123<MEMO>TOWN NAME;CC#0000********0000</STMTTRN>\
+            00000000000001<NAME>A&W 1473<MEMO>TOWN NAME;CC#0000********0000</STMTTRN>\
             <STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20241223120000.000[-5:EST]<TRNAMT>-44.46<FITID>\
             00000000000002<NAME>GAS STATION 123<MEMO>TOWN NAME;CC#0000********0000</STMTTRN>\
             <STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20241218120000.000[-5:EST]<TRNAMT>152.98<FITID>\
@@ -279,31 +283,28 @@ mod tests {
             </CREDITCARDMSGSRSV1></OFX>",
         )
         .unwrap();
-        assert_eq!(
-            transactions,
-            vec![
-                OfxTransaction {
-                    transaction_kind: TransactionKind::DEBIT,
-                    date_posted: NaiveDate::from_ymd_opt(2024, 12, 23).unwrap(),
-                    amount: -6.10,
-                    name: Some("GAS STATION 123".into()),
-                    memo: Some("TOWN NAME;CC#0000********0000".into()),
-                },
-                OfxTransaction {
-                    transaction_kind: TransactionKind::DEBIT,
-                    date_posted: NaiveDate::from_ymd_opt(2024, 12, 23).unwrap(),
-                    amount: -44.46,
-                    name: Some("GAS STATION 123".into()),
-                    memo: Some("TOWN NAME;CC#0000********0000".into()),
-                },
-                OfxTransaction {
-                    transaction_kind: TransactionKind::CREDIT,
-                    date_posted: NaiveDate::from_ymd_opt(2024, 12, 18).unwrap(),
-                    amount: 152.98,
-                    name: Some("PAYMENT THANK YOU/PAIEMEN".into()),
-                    memo: Some("CC#0000********0000".into()),
-                }
-            ]
-        );
+        assert_eq!(transactions, vec![
+            OfxTransaction {
+                transaction_kind: TransactionKind::DEBIT,
+                date_posted: NaiveDate::from_ymd_opt(2024, 12, 23).unwrap(),
+                amount: -6.10,
+                name: Some("A&W 1473".into()),
+                memo: Some("TOWN NAME;CC#0000********0000".into()),
+            },
+            OfxTransaction {
+                transaction_kind: TransactionKind::DEBIT,
+                date_posted: NaiveDate::from_ymd_opt(2024, 12, 23).unwrap(),
+                amount: -44.46,
+                name: Some("GAS STATION 123".into()),
+                memo: Some("TOWN NAME;CC#0000********0000".into()),
+            },
+            OfxTransaction {
+                transaction_kind: TransactionKind::CREDIT,
+                date_posted: NaiveDate::from_ymd_opt(2024, 12, 18).unwrap(),
+                amount: 152.98,
+                name: Some("PAYMENT THANK YOU/PAIEMEN".into()),
+                memo: Some("CC#0000********0000".into()),
+            }
+        ]);
     }
 }

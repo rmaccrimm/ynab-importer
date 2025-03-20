@@ -8,3 +8,4 @@ db.sqlite3
 # Personal access token
 .pat
 test*.qfx
+.DS_Store

@@ -128,17 +128,17 @@ impl EventHandler {
     pub async fn handle(&self, event: &DebouncedEvent) -> Result<()> {
         match event.kind {
             Create(CreateKind::File) => {
-		if event.paths.is_empty() {
-		    return Err(ImportError::NoPathError.into());
-		}
-		let path = &event.paths[0];
-		if let Some(ext) = path.extension() {
-		    let ext = ext.to_ascii_lowercase();
-		    if (ext != "qfx") && (ext != "ofx") {
-			println!("Ignoring non qfx file {:?}", path.display());
-			return Ok(());
-		    }
-		}
+                if event.paths.is_empty() {
+                    return Err(ImportError::NoPathError.into());
+                }
+                let path = &event.paths[0];
+                if let Some(ext) = path.extension() {
+                    let ext = ext.to_ascii_lowercase();
+                    if (ext != "qfx") && (ext != "ofx") {
+                        println!("Ignoring non qfx file {:?}", path.display());
+                        return Ok(());
+                    }
+                }
                 self.create_transactions_with_retry(path).await
             }
             _ => {
