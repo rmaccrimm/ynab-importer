@@ -96,7 +96,7 @@ impl TransactionKey {
         let mut s = String::new();
         write!(
             s,
-            "ynab_importer:{}:{}:{}",
+            "YNAB:{}:{}:{}",
             self.date, self.amount_millis, self.occurrence
         )
         .unwrap();
