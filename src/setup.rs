@@ -120,7 +120,7 @@ pub fn sync_transactions(
     });
 
     let tx = conn.transaction()?;
-    while let Ok(res) = rx.recv() {
+    for res in rx {
         for t in res? {
             transaction::create_if_not_exists(&tx, t)?;
         }
