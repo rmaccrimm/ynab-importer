@@ -1,6 +1,7 @@
 /target
 # folder used for testing
 /downloads
+/test_files
 /.scratch
 /.vscode
 ynab_spec.yaml
