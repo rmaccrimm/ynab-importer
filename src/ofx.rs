@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::fs;
 use std::path::PathBuf;
 
@@ -76,15 +77,41 @@ pub struct OfxTransaction {
     pub memo: Option<String>,
 }
 
-// Just assume that the XML portion extends to the end of the file
 fn get_ofx_block(file_contents: &str) -> Option<&str> {
     let re = Regex::new("<OFX>").unwrap();
     let m = re.find(file_contents)?;
     Some(&file_contents[m.start()..])
 }
 
+fn replace_ampersands(text: &str) -> String {
+    let amp_re = Regex::new("&[a-z]*;?").unwrap();
+    let mut res = String::new();
+    let mut pos = 0;
+    for m in amp_re.find_iter(text) {
+        write!(&mut res, "{}", &text[pos..m.start()]).unwrap();
+
+        if ["&amp;", "&lt;", "&gt;", "&quot;", "&nbsp;"].contains(&m.as_str()) {
+            write!(&mut res, "{}", &text[m.start()..m.end()]).unwrap();
+        } else {
+            write!(&mut res, "&amp;{}", &text[m.start() + 1..m.end()]).unwrap();
+        }
+        pos = m.end();
+    }
+    write!(&mut res, "{}", &text[pos..]).unwrap();
+    res
+}
+
+fn preprocess_text(file_contents: &str) -> Option<String> {
+    let ofx_block = get_ofx_block(file_contents);
+    if let Some(text) = ofx_block {
+        Some(replace_ampersands(text))
+    } else {
+        None
+    }
+}
+
 fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
-    let xml = get_ofx_block(file_contents).unwrap();
+    let xml = preprocess_text(file_contents).unwrap();
     let builder = sgmlish::Parser::builder()
         .uppercase_names()
         .expand_entities(|entity| match entity {
@@ -92,19 +119,11 @@ fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
             "gt" => Some(">"),
             "amp" => Some("&"),
             "nbsp" => Some(" "),
+            "quot" => Some("\""),
             _ => None,
         });
 
-    let sgml = {
-        if let Ok(s) = builder.parse(xml) {
-            s
-        } else {
-            // Fallback on parser that does not do entity expansion, since not all banks export
-            // with the &amp encoding
-            sgmlish::Parser::builder().uppercase_names().parse(xml)?
-        }
-    };
-
+    let sgml = builder.parse(&xml)?;
     let mut events = Vec::new();
     let mut include = false;
 
@@ -128,7 +147,7 @@ fn parse(file_contents: &str) -> Result<Vec<OfxTransaction>, sgmlish::Error> {
             events.push(event.clone());
         }
     }
-    let sgml = SgmlFragment::from(events);
+    let sgml = sgmlish::transforms::normalize_end_tags(SgmlFragment::from(events))?;
     let result = sgmlish::from_fragment::<Ofx>(sgml)?;
     Ok(result.transactions)
 }
@@ -144,6 +163,25 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_replace_ampersands() {
+        assert_eq!(replace_ampersands("<TAG>A&W</TAG>"), "<TAG>A&amp;W</TAG>");
+        assert_eq!(replace_ampersands("<TAG>A& W</TAG>"), "<TAG>A&amp; W</TAG>");
+        assert_eq!(replace_ampersands("&&&amp;&"), "&amp;&amp;&amp;&amp;");
+        assert_eq!(
+            replace_ampersands("<TAG>A&amp;W</TAG>"),
+            "<TAG>A&amp;W</TAG>"
+        );
+        assert_eq!(replace_ampersands("<TAG>A&"), "<TAG>A&amp;");
+        assert_eq!(
+            replace_ampersands("&SOME TEXT</OFX>"),
+            "&amp;SOME TEXT</OFX>"
+        );
+        assert_eq!(replace_ampersands("A&lt;B"), "A&lt;B");
+        assert_eq!(replace_ampersands("&gt;B"), "&gt;B");
+        assert_eq!(replace_ampersands("&quot;B&quot;"), "&quot;B&quot;");
+    }
 
     #[test]
     fn test_parse() {
@@ -200,8 +238,10 @@ mod tests {
             <AVAILBAL><BALAMT>-11692.05<DTASOF>20241120170806.513[-5:EST]</AVAILBAL></STMTRS>\
             </STMTTRNRS></BANKMSGSRSV1></OFX>\
             ",
-        )
-        .unwrap();
+        );
+        println!("{:?}", transactions);
+        let transactions = transactions.unwrap();
+
         assert_eq!(transactions, vec![
             OfxTransaction {
                 transaction_kind: TransactionKind::DEBIT,
@@ -255,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_credit_card() {
+    fn test_parse_credit_card_with_ampersand() {
         let transactions = parse(
             "OFXHEADER:100\
             DATA:OFXSGML\
@@ -281,8 +321,15 @@ mod tests {
             </BANKTRANLIST><LEDGERBAL><BALAMT>-50.56<DTASOF>20241226044534</LEDGERBAL><AVAILBAL>\
             <BALAMT>9949.44<DTASOF>20241226044534</AVAILBAL></CCSTMTRS></CCSTMTTRNRS>\
             </CREDITCARDMSGSRSV1></OFX>",
-        )
-        .unwrap();
+        );
+        let transactions = match transactions {
+            Ok(t) => t,
+            Err(err) => {
+                println!("{}", err.to_string());
+                return;
+            }
+        };
+
         assert_eq!(transactions, vec![
             OfxTransaction {
                 transaction_kind: TransactionKind::DEBIT,
