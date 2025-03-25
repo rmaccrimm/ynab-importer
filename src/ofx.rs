@@ -55,8 +55,22 @@ where
 pub enum TransactionKind {
     DEBIT = 1,
     CREDIT = 2,
-    OTHER = 3,
-    ATM = 4,
+    ATM = 3,
+    INT = 4,
+    AMOUNT = 5,
+    DIV = 6,
+    FEE = 7,
+    SRVCHG = 8,
+    DEP = 9,
+    POS = 10,
+    XFER = 11,
+    CHECK = 12,
+    PAYMENT = 13,
+    CASH = 14,
+    DIRECTDEP = 15,
+    REPEATPMT = 16,
+    HOLD = 17,
+    OTHER = 18,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -163,6 +177,7 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use pretty_assertions::assert_eq;
+    use std::fs;
 
     #[test]
     fn test_replace_ampersands() {
@@ -353,5 +368,14 @@ mod tests {
                 memo: Some("CC#0000********0000".into()),
             }
         ]);
+    }
+
+    #[test]
+    fn parse_test_files() {
+        for f in fs::read_dir("test_files").unwrap() {
+            let p = f.unwrap().path();
+            let body = fs::read_to_string(&p).unwrap();
+            parse(&body).expect(&format!("Error parsing {}", p.display()));
+        }
     }
 }
